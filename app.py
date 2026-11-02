@@ -8,7 +8,7 @@ from pdf2image import convert_from_path
 from pyzbar.pyzbar import decode
 
 from reportlab.lib.pagesizes import A4
-from reportlab.platypus import SimpleDocTemplate, Table, Paragraph, Spacer
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, PageBreak, Paragraph, Spacer
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.graphics.barcode import code128
@@ -26,7 +26,6 @@ BOLD_FONT = "Helvetica-Bold"
 def extract_order_data_from_pdf(pdf_path):
     orders_on_page = []
     try:
-        # Poppler yolu bulut sunucularda genelde sistem PATH'indedir, localde ise belirtilir
         images = convert_from_path(pdf_path)
     except Exception:
         images = []
@@ -227,7 +226,6 @@ def build_grouped_a4_pdf(grouped_receipts, output_pdf_path):
 
             story.append(table)
             if i + 6 < len(label_cells) or g_counter < total_groups:
-                from reportlab.platypus import PageBreak
                 story.append(PageBreak())
 
     doc.build(story)
@@ -240,7 +238,6 @@ if uploaded_files:
         with st.spinner("PDF'ler işleniyor, lütfen bekleyin..."):
             all_orders = []
             
-            # Geçici klasörde dosyaları işleme
             with tempfile.TemporaryDirectory() as temp_dir:
                 for uploaded_file in uploaded_files:
                     temp_path = os.path.join(temp_dir, uploaded_file.name)
