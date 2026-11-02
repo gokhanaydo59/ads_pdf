@@ -17,7 +17,7 @@ from reportlab.graphics.barcode import code128
 st.set_page_config(page_title="Trendyol Etiket Düzenleyici", page_icon="📦", layout="centered")
 
 st.title("📦 Trendyol Toplu Etiket ve Fiş Dönüştürücü")
-st.write("Trendyol'dan indirdiğiniz PDF fişlerini buraya yükleyin, sistem sipariş numarasına göre doğru gruplama yaparak fazladan sayfa oluşmasını engeller.")
+st.write("Trendyol'dan indirdiğiniz PDF fişlerini buraya yükleyin, sistem **ürün ismine göre** gruplama yaparak etiketleri düzenlesin.")
 
 MAIN_FONT = "Helvetica"
 BOLD_FONT = "Helvetica-Bold"
@@ -149,8 +149,8 @@ def extract_order_data_from_pdf(pdf_path):
             
             is_multi = len(products) > 1 or total_qty > 1
 
-            # DÜZELTME: Gruplama artık hatalı barkodlar yerine doğrudan SİPARİŞ NUMARASINA (order_no) göre yapılıyor.
-            group_key = order_no if order_no != "N/A" else cargo_bc
+            # DEĞİŞİKLİK: Gruplama artık doğrudan ÜRÜN İSMİNE göre yapılıyor.
+            group_key = products[0]["name"] if products else "Diger_Urunler"
 
             orders_on_page.append({
                 "order_no": order_no,
