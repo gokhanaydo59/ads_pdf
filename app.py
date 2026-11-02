@@ -17,11 +17,26 @@ from reportlab.graphics.barcode import code128
 st.set_page_config(page_title="Trendyol Etiket Düzenleyici", page_icon="📦", layout="centered")
 
 st.title("📦 Trendyol Toplu Etiket ve Fiş Dönüştürücü")
-st.write("Trendyol'dan indirdiğiniz PDF fişlerini buraya yükleyin, sistem bunları otomatik gruplayarak A4 formatında tek bir şık PDF'e dönüştürsün.")
+st.write("Trendyol'dan indirdiğiniz PDF fişlerini buraya yükleyin, sistem sipariş numarasına göre doğru gruplama yaparak fazladan sayfa oluşmasını engeller.")
 
-# Font tanımlamaları (Bulut sunucularda Helvetica yedekli çalışır)
 MAIN_FONT = "Helvetica"
 BOLD_FONT = "Helvetica-Bold"
+
+def fix_tr(text):
+    """Türkçe karakterleri PDF fontunun (Helvetica) bozulmaması için uyumlu hale getirir."""
+    if not isinstance(text, str):
+        return str(text)
+    tr_map = {
+        'ş': 's', 'Ş': 'S',
+        'ğ': 'g', 'Ğ': 'G',
+        'İ': 'I', 'ı': 'i',
+        'ö': 'o', 'Ö': 'O',
+        'ü': 'u', 'Ü': 'U',
+        'ç': 'c', 'Ç': 'C'
+    }
+    for k, v in tr_map.items():
+        text = text.replace(k, v)
+    return text
 
 def extract_order_data_from_pdf(pdf_path):
     orders_on_page = []
@@ -45,7 +60,7 @@ def extract_order_data_from_pdf(pdf_path):
             recipient = "N/A"
             r_match = re.search(r'Ad-Soyad\s*[:\|]?\s*(.*?)(?=\n\s*Adres|\n\s*Çıkış|$)', text, re.DOTALL)
             if r_match:
-                recipient = re.sub(r'^[:\s]+', '', r_match.group(1)).strip().replace('\n', ' ')
+                recipient = fix_tr(re.sub(r'^[:\s]+', '', r_match.group(1)).strip().replace('\n', ' '))
 
             # 3. Kargo Barkodu
             cargo_bc = "N/A"
@@ -79,7 +94,7 @@ def extract_order_data_from_pdf(pdf_path):
                     if len(parts) < 2:
                         break
 
-                    product_name = parts[0].strip()
+                    product_name = fix_tr(parts[0].strip())
                     product_name = re.sub(r'^\d+\s*', '', product_name).strip()
 
                     after_header = parts[1].strip()
@@ -106,9 +121,9 @@ def extract_order_data_from_pdf(pdf_path):
                             barcode = tokens[-2]
                         middle = tokens[:-2]
                         if middle:
-                            color = middle[0]
+                            color = fix_tr(middle[0])
                             if len(middle) > 1:
-                                size = " ".join(middle[1:])
+                                size = fix_tr(" ".join(middle[1:]))
                             else:
                                 size = "Tek Ebat"
                         else:
@@ -133,7 +148,9 @@ def extract_order_data_from_pdf(pdf_path):
                 if qm: total_qty += int(qm.group(0))
             
             is_multi = len(products) > 1 or total_qty > 1
-            group_key = products[0]["barcode"] if products and products[0]["barcode"] != "-" else cargo_bc
+
+            # DÜZELTME: Gruplama artık hatalı barkodlar yerine doğrudan SİPARİŞ NUMARASINA (order_no) göre yapılıyor.
+            group_key = order_no if order_no != "N/A" else cargo_bc
 
             orders_on_page.append({
                 "order_no": order_no,
@@ -171,7 +188,7 @@ def build_grouped_a4_pdf(grouped_receipts, output_pdf_path):
         for item in items:
             cell_elements = []
             cell_elements.append(Paragraph(f"<b>ALICI:</b> {item['recipient']}", recipient_style))
-            cell_elements.append(Paragraph(f"Sipariş No: {item['order_no']}", order_style))
+            cell_elements.append(Paragraph(f"Siparis No: {item['order_no']}", order_style))
             cell_elements.append(Spacer(1, 3))
             
             if item['cargo_barcode'] != "N/A":
@@ -186,7 +203,7 @@ def build_grouped_a4_pdf(grouped_receipts, output_pdf_path):
 
             cell_elements.append(Spacer(1, 3))
             if item["is_multi"]:
-                cell_elements.append(Paragraph("<b>⚠️ DİKKAT: ÇOKLU SİPARİŞ ⚠️</b>", multi_style))
+                cell_elements.append(Paragraph("<b>⚠️ DIKKAT: COKLU SIPARIS ⚠️</b>", multi_style))
                 cell_elements.append(Spacer(1, 3))
             
             products_html = ""
@@ -194,7 +211,7 @@ def build_grouped_a4_pdf(grouped_receipts, output_pdf_path):
                 name = p['name']
                 if len(name) > 95:
                     name = name[:92] + "..."
-                products_html += f"<font color='#2980B9'><b>• Ürün #{p['index']}:</b></font> {name}<br/>"
+                products_html += f"<font color='#2980B9'><b>• Urun #{p['index']}:</b></font> {name}<br/>"
                 products_html += f"&nbsp;&nbsp;<b>Adet:</b> <font color='#C0392B'><b>{p['qty']}</b></font> | <b>Renk:</b> {p['color']} | <b>Beden:</b> {p['size']}<br/>"
                 products_html += f"&nbsp;&nbsp;<b>Barkod:</b> {p['barcode']} | <b>Stok Kodu:</b> {p['sku']}<br/><br/>"
 
