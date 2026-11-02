@@ -17,7 +17,15 @@ from reportlab.graphics.barcode import code128
 st.set_page_config(page_title="Trendyol Etiket Düzenleyici", page_icon="📦", layout="centered")
 
 st.title("📦 Trendyol Toplu Etiket ve Fiş Dönüştürücü")
-st.write("Trendyol'dan indirdiğiniz PDF fişlerini buraya yükleyin, sistem **ürün ismine göre** gruplama yaparak etiketleri düzenlesin.")
+st.write("Trendyol'dan indirdiğiniz PDF fişlerini yükleyin; ürün ismine göre gruplayıp, barkodları büyüterek ve tasarruf moduyla optimize edip hazırlayalım.")
+
+# Yan Menü (Sidebar) Ayarları
+st.sidebar.header("⚙️ Baskı Ayarları")
+sayfa_tasarruf = st.sidebar.checkbox(
+    "Sayfa Tasarruf Modu", 
+    value=True, 
+    help="Etiketleri aralarında boşluk bırakmadan sayfaları tam dolduracak şekilde sıkılaştırır ve kağıt tasarrufu sağlar."
+)
 
 MAIN_FONT = "Helvetica"
 BOLD_FONT = "Helvetica-Bold"
@@ -149,7 +157,7 @@ def extract_order_data_from_pdf(pdf_path):
             
             is_multi = len(products) > 1 or total_qty > 1
 
-            # DEĞİŞİKLİK: Gruplama artık doğrudan ÜRÜN İSMİNE göre yapılıyor.
+            # ÜRÜN İSMİNE GÖRE GRUPLAMA
             group_key = products[0]["name"] if products else "Diger_Urunler"
 
             orders_on_page.append({
@@ -163,7 +171,7 @@ def extract_order_data_from_pdf(pdf_path):
 
     return orders_on_page
 
-def build_grouped_a4_pdf(grouped_receipts, output_pdf_path):
+def build_grouped_a4_pdf(grouped_receipts, output_pdf_path, tasarruf_modu):
     doc = SimpleDocTemplate(
         output_pdf_path,
         pagesize=A4,
@@ -171,55 +179,58 @@ def build_grouped_a4_pdf(grouped_receipts, output_pdf_path):
     )
 
     styles = getSampleStyleSheet()
-    recipient_style = ParagraphStyle('RecipientTitle', parent=styles['Normal'], fontSize=9.5, leading=12, fontName=BOLD_FONT, textColor=colors.HexColor("#2C3E50"))
-    order_style = ParagraphStyle('OrderTitle', parent=styles['Normal'], fontSize=7.5, leading=9.5, fontName=MAIN_FONT, textColor=colors.HexColor("#7F8C8D"))
-    multi_style = ParagraphStyle('MultiWarning', parent=styles['Normal'], fontSize=8.5, leading=11, fontName=BOLD_FONT, textColor=colors.HexColor("#FFFFFF"), backColor=colors.HexColor("#C0392B"), alignment=1)
-    text_style = ParagraphStyle('LabelText', parent=styles['Normal'], fontSize=7.5, leading=10, fontName=MAIN_FONT, textColor=colors.HexColor("#34495E"))
-    bc_text_style = ParagraphStyle('BarcodeText', parent=styles['Normal'], fontSize=9.5, leading=12, fontName=BOLD_FONT, alignment=1, textColor=colors.HexColor("#2C3E50"))
+    recipient_style = ParagraphStyle('RecipientTitle', parent=styles['Normal'], fontSize=9.0, leading=11, fontName=BOLD_FONT, textColor=colors.HexColor("#2C3E50"))
+    order_style = ParagraphStyle('OrderTitle', parent=styles['Normal'], fontSize=7.0, leading=9.0, fontName=MAIN_FONT, textColor=colors.HexColor("#7F8C8D"))
+    multi_style = ParagraphStyle('MultiWarning', parent=styles['Normal'], fontSize=8.0, leading=10, fontName=BOLD_FONT, textColor=colors.HexColor("#FFFFFF"), backColor=colors.HexColor("#C0392B"), alignment=1)
+    text_style = ParagraphStyle('LabelText', parent=styles['Normal'], fontSize=7.0, leading=9.5, fontName=MAIN_FONT, textColor=colors.HexColor("#34495E"))
+    bc_text_style = ParagraphStyle('BarcodeText', parent=styles['Normal'], fontSize=8.5, leading=11, fontName=BOLD_FONT, alignment=1, textColor=colors.HexColor("#2C3E50"))
+    
+    # Sayfa başı ufak ürün başlığı stili
+    page_header_style = ParagraphStyle('PageHeaderTitle', parent=styles['Normal'], fontSize=8.0, leading=10, fontName=BOLD_FONT, textColor=colors.HexColor("#1B4F72"), alignment=0)
 
     story = []
-    total_groups = len(grouped_receipts)
-    g_counter = 0
+    
+    if tasarruf_modu:
+        # Tasarruf modunda tüm etiketler tek bir havuza toplanır, boşluklar ortadan kalkar
+        all_label_cells = []
+        for group_key, items in grouped_receipts.items():
+            for item in items:
+                cell_elements = []
+                cell_elements.append(Paragraph(f"<b>ALICI:</b> {item['recipient']}", recipient_style))
+                cell_elements.append(Paragraph(f"Siparis No: {item['order_no']}", order_style))
+                cell_elements.append(Spacer(1, 2))
+                
+                # BARKOD BOYUTU BÜYÜTÜLDÜ (Okunabilirlik için)
+                if item['cargo_barcode'] != "N/A":
+                    try:
+                        bc = code128.Code128(item['cargo_barcode'], barHeight=46, barWidth=1.15)
+                        cell_elements.append(bc)
+                        cell_elements.append(Paragraph(f"{item['cargo_barcode']}", bc_text_style))
+                    except Exception:
+                        cell_elements.append(Paragraph(f"Kargo Kodu: {item['cargo_barcode']}", bc_text_style))
+                else:
+                    cell_elements.append(Paragraph("<b>[Kargo Barkodu Okunamadı]</b>", recipient_style))
 
-    for group_key, items in grouped_receipts.items():
-        g_counter += 1
-        label_cells = []
+                cell_elements.append(Spacer(1, 2))
+                if item["is_multi"]:
+                    cell_elements.append(Paragraph("<b>⚠️ DIKKAT: COKLU SIPARIS ⚠️</b>", multi_style))
+                    cell_elements.append(Spacer(1, 2))
+                
+                products_html = ""
+                for p in item["products"]:
+                    name = p['name']
+                    if len(name) > 85:
+                        name = name[:82] + "..."
+                    products_html += f"<font color='#2980B9'><b>• Urun #{p['index']}:</b></font> {name}<br/>"
+                    products_html += f"&nbsp;&nbsp;<b>Adet:</b> <font color='#C0392B'><b>{p['qty']}</b></font> | <b>Renk:</b> {p['color']} | <b>Beden:</b> {p['size']}<br/>"
+                    products_html += f"&nbsp;&nbsp;<b>Barkod:</b> {p['barcode']} | <b>Stok Kodu:</b> {p['sku']}<br/><br/>"
 
-        for item in items:
-            cell_elements = []
-            cell_elements.append(Paragraph(f"<b>ALICI:</b> {item['recipient']}", recipient_style))
-            cell_elements.append(Paragraph(f"Siparis No: {item['order_no']}", order_style))
-            cell_elements.append(Spacer(1, 3))
-            
-            if item['cargo_barcode'] != "N/A":
-                try:
-                    bc = code128.Code128(item['cargo_barcode'], barHeight=34, barWidth=0.92)
-                    cell_elements.append(bc)
-                    cell_elements.append(Paragraph(f"{item['cargo_barcode']}", bc_text_style))
-                except Exception:
-                    cell_elements.append(Paragraph(f"Kargo Kodu: {item['cargo_barcode']}", bc_text_style))
-            else:
-                cell_elements.append(Paragraph("<b>[Kargo Barkodu Okunamadı]</b>", recipient_style))
+                cell_elements.append(Paragraph(products_html.strip(), text_style))
+                all_label_cells.append(cell_elements)
 
-            cell_elements.append(Spacer(1, 3))
-            if item["is_multi"]:
-                cell_elements.append(Paragraph("<b>⚠️ DIKKAT: COKLU SIPARIS ⚠️</b>", multi_style))
-                cell_elements.append(Spacer(1, 3))
-            
-            products_html = ""
-            for p in item["products"]:
-                name = p['name']
-                if len(name) > 95:
-                    name = name[:92] + "..."
-                products_html += f"<font color='#2980B9'><b>• Urun #{p['index']}:</b></font> {name}<br/>"
-                products_html += f"&nbsp;&nbsp;<b>Adet:</b> <font color='#C0392B'><b>{p['qty']}</b></font> | <b>Renk:</b> {p['color']} | <b>Beden:</b> {p['size']}<br/>"
-                products_html += f"&nbsp;&nbsp;<b>Barkod:</b> {p['barcode']} | <b>Stok Kodu:</b> {p['sku']}<br/><br/>"
-
-            cell_elements.append(Paragraph(products_html.strip(), text_style))
-            label_cells.append(cell_elements)
-
-        for i in range(0, len(label_cells), 6):
-            page_chunk = label_cells[i:i+6]
+        # 6'lı bloklar halinde sayfalara böl
+        for i in range(0, len(all_label_cells), 6):
+            page_chunk = all_label_cells[i:i+6]
             while len(page_chunk) < 6:
                 page_chunk.append([Paragraph("", text_style)])
 
@@ -235,15 +246,88 @@ def build_grouped_a4_pdf(grouped_receipts, output_pdf_path):
                 ('INNERGRID', (0,0), (-1,-1), 0.6, colors.HexColor("#BDC3C7")),
                 ('BACKGROUND', (0,0), (-1,-1), colors.HexColor("#FFFFFF")),
                 ('VALIGN', (0,0), (-1,-1), 'TOP'),
-                ('TOPPADDING', (0,0), (-1,-1), 6),
-                ('BOTTOMPADDING', (0,0), (-1,-1), 6),
-                ('LEFTPADDING', (0,0), (-1,-1), 8),
-                ('RIGHTPADDING', (0,0), (-1,-1), 8),
+                ('TOPPADDING', (0,0), (-1,-1), 5),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 5),
+                ('LEFTPADDING', (0,0), (-1,-1), 7),
+                ('RIGHTPADDING', (0,0), (-1,-1), 7),
             ]))
 
             story.append(table)
-            if i + 6 < len(label_cells) or g_counter < total_groups:
+            if i + 6 < len(all_label_cells):
                 story.append(PageBreak())
+    else:
+        # Normal mod (Ürün grubuna göre ayrı sayfalar)
+        total_groups = len(grouped_receipts)
+        g_counter = 0
+
+        for group_key, items in grouped_receipts.items():
+            g_counter += 1
+            label_cells = []
+
+            for item in items:
+                cell_elements = []
+                cell_elements.append(Paragraph(f"<b>ALICI:</b> {item['recipient']}", recipient_style))
+                cell_elements.append(Paragraph(f"Siparis No: {item['order_no']}", order_style))
+                cell_elements.append(Spacer(1, 2))
+                
+                if item['cargo_barcode'] != "N/A":
+                    try:
+                        bc = code128.Code128(item['cargo_barcode'], barHeight=46, barWidth=1.15)
+                        cell_elements.append(bc)
+                        cell_elements.append(Paragraph(f"{item['cargo_barcode']}", bc_text_style))
+                    except Exception:
+                        cell_elements.append(Paragraph(f"Kargo Kodu: {item['cargo_barcode']}", bc_text_style))
+                else:
+                    cell_elements.append(Paragraph("<b>[Kargo Barkodu Okunamadı]</b>", recipient_style))
+
+                cell_elements.append(Spacer(1, 2))
+                if item["is_multi"]:
+                    cell_elements.append(Paragraph("<b>⚠️ DIKKAT: COKLU SIPARIS ⚠️</b>", multi_style))
+                    cell_elements.append(Spacer(1, 2))
+                
+                products_html = ""
+                for p in item["products"]:
+                    name = p['name']
+                    if len(name) > 85:
+                        name = name[:82] + "..."
+                    products_html += f"<font color='#2980B9'><b>• Urun #{p['index']}:</b></font> {name}<br/>"
+                    products_html += f"&nbsp;&nbsp;<b>Adet:</b> <font color='#C0392B'><b>{p['qty']}</b></font> | <b>Renk:</b> {p['color']} | <b>Beden:</b> {p['size']}<br/>"
+                    products_html += f"&nbsp;&nbsp;<b>Barkod:</b> {p['barcode']} | <b>Stok Kodu:</b> {p['sku']}<br/><br/>"
+
+                cell_elements.append(Paragraph(products_html.strip(), text_style))
+                label_cells.append(cell_elements)
+
+            for i in range(0, len(label_cells), 6):
+                page_chunk = label_cells[i:i+6]
+                while len(page_chunk) < 6:
+                    page_chunk.append([Paragraph("", text_style)])
+
+                # Sayfanın başına ufak, okunabilir ürün adı başlığı ekleme
+                display_group_name = group_key if len(group_key) <= 90 else group_key[:87] + "..."
+                story.append(Paragraph(f"<b>Urun Grubu:</b> {display_group_name}", page_header_style))
+                story.append(Spacer(1, 4))
+
+                grid_matrix = [
+                    [page_chunk[0], page_chunk[1]],
+                    [page_chunk[2], page_chunk[3]],
+                    [page_chunk[4], page_chunk[5]]
+                ]
+
+                table = Table(grid_matrix, colWidths=[285, 285], rowHeights=[252, 252, 252])
+                table.setStyle(TableStyle([
+                    ('BOX', (0,0), (-1,-1), 1.5, colors.HexColor("#34495E")),
+                    ('INNERGRID', (0,0), (-1,-1), 0.6, colors.HexColor("#BDC3C7")),
+                    ('BACKGROUND', (0,0), (-1,-1), colors.HexColor("#FFFFFF")),
+                    ('VALIGN', (0,0), (-1,-1), 'TOP'),
+                    ('TOPPADDING', (0,0), (-1,-1), 5),
+                    ('BOTTOMPADDING', (0,0), (-1,-1), 5),
+                    ('LEFTPADDING', (0,0), (-1,-1), 7),
+                    ('RIGHTPADDING', (0,0), (-1,-1), 7),
+                ]))
+
+                story.append(table)
+                if i + 6 < len(label_cells) or g_counter < total_groups:
+                    story.append(PageBreak())
 
     doc.build(story)
 
@@ -270,7 +354,7 @@ if uploaded_files:
 
                 output_pdf_path = os.path.join(temp_dir, "Baski_Hazir_Etiketler.pdf")
                 if grouped:
-                    build_grouped_a4_pdf(grouped, output_pdf_path)
+                    build_grouped_a4_pdf(grouped, output_pdf_path, sayfa_tasarruf)
                     
                     with open(output_pdf_path, "rb") as f:
                         pdf_bytes = f.read()
