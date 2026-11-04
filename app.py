@@ -24,7 +24,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 # 1. ARAYÜZ VE TÜRKÇE FONT AYARLARI
 # ==========================================
 st.set_page_config(page_title="Trendyol Etiket Düzenleyici", page_icon="📦", layout="wide")
-st.title("📦 Trendyol Toplu Etiket (Renk Analizli Logo Tespiti)")
+st.title("📦 Trendyol Toplu Etiket ve Fiş Dönüştürücü")
 
 @st.cache_resource
 def load_turkish_fonts():
@@ -50,9 +50,7 @@ def fix_tr(text):
 # 2. RENK ANALİZİ İLE KARGO TESPİT MOTORU
 # ==========================================
 def detect_cargo_by_color_analysis(cropped_pil_img):
-    """
-    Kırpılan logonun piksellerindeki RGB renk dağılımını analiz eder.
-    """
+    """Kırpılan logonun piksellerindeki RGB renk dağılımını analiz eder."""
     if not cropped_pil_img:
         return "Görselden Kontrol Edin"
 
@@ -60,30 +58,21 @@ def detect_cargo_by_color_analysis(cropped_pil_img):
     img_small = img_rgb.resize((60, 60))
     pixels = list(img_small.getdata())
 
-    orange_count = 0  # Trendyol Express (Turuncu)
-    yellow_count = 0  # PTT Kargo (Sarı)
-    blue_count = 0    # PTT / Yurtiçi (Mavi)
-    red_count = 0     # Aras / MNG (Kırmızı)
+    orange_count, yellow_count, blue_count, red_count = 0, 0, 0, 0
 
     for r, g, b in pixels:
-        # Arka plan beyaz ve siyahları ele
         if (r > 220 and g > 220 and b > 220) or (r < 35 and g < 35 and b < 35):
             continue
 
-        # Trendyol Turuncusu
         if r > 190 and 70 <= g <= 150 and b < 90:
             orange_count += 1
-        # PTT Sarısı
         elif r > 180 and g > 140 and b < 100:
             yellow_count += 1
-        # PTT / Yurtiçi Mavisi
         elif r < 90 and 60 <= g <= 160 and b > 130:
             blue_count += 1
-        # Aras / MNG Kırmızı
         elif r > 180 and g < 70 and b < 70:
             red_count += 1
 
-    # Dominant Renk Kararı
     if orange_count > 12:
         return "Trendyol Express"
     elif yellow_count > 8 or (yellow_count > 3 and blue_count > 3):
@@ -113,8 +102,7 @@ def parse_trendyol_attribute_block(text_block, cargo_bc="N/A"):
     color_match = re.search(color_pattern, text_block, re.IGNORECASE)
     color = color_match.group(1).upper() if color_match else "-"
 
-    barcode = "-"
-    sku = "-"
+    barcode, sku = "-", "-"
 
     combined_match = re.search(r'\b(TYB[A-Z0-9]{12,20})([a-zA-Z0-9_\-\u00c0-\u017f]+)?\b', text_block)
     if combined_match:
@@ -157,7 +145,6 @@ def extract_order_data_from_pdf(pdf_path):
         cargo_logo_bytes = None
         cropped_img_pil = None
         
-        # 1. Logonun Bulunduğu Bölgeyi Kırpma
         if page_img:
             w, h = page_img.size
             crop_box = (int(w * 0.65), int(h * 0.02), int(w * 0.99), int(h * 0.22))
@@ -167,10 +154,8 @@ def extract_order_data_from_pdf(pdf_path):
             cropped_img_pil.save(buf, format='PNG')
             cargo_logo_bytes = buf.getvalue()
 
-            # Renk Analizi ile Kargo Tespiti
             cargo_company = detect_cargo_by_color_analysis(cropped_img_pil)
 
-        # 2. Metin Bloklarını Çekme
         text_blocks = []
         for element in page_layout:
             if isinstance(element, LTTextContainer):
@@ -288,9 +273,9 @@ def extract_order_data_from_pdf(pdf_path):
     return orders_on_page, raw_texts
 
 # ==========================================
-# 5. PDF BASTIRMA
+# 5. DÜZENLİ PDF BASTIRMA (GRUP / TASARRUF MODLU)
 # ==========================================
-def build_grouped_a4_pdf(grouped_receipts, output_pdf_path, sadece_gorsel_kargo):
+def build_grouped_a4_pdf(grouped_receipts, output_pdf_path, duzen_modu, sadece_gorsel_kargo):
     doc = SimpleDocTemplate(output_pdf_path, pagesize=A4, leftMargin=12, rightMargin=12, topMargin=8, bottomMargin=8)
     styles = getSampleStyleSheet()
     
@@ -300,102 +285,189 @@ def build_grouped_a4_pdf(grouped_receipts, output_pdf_path, sadece_gorsel_kargo)
     multi_style = ParagraphStyle('Multi', parent=styles['Normal'], fontSize=8.0, leading=10, fontName=BOLD_FONT, textColor=colors.HexColor("#FFFFFF"), backColor=colors.HexColor("#C0392B"), alignment=1)
     text_style = ParagraphStyle('Txt', parent=styles['Normal'], fontSize=6.8, leading=9.0, fontName=MAIN_FONT, textColor=colors.HexColor("#34495E"))
     bc_text_style = ParagraphStyle('BC', parent=styles['Normal'], fontSize=8.5, leading=11, fontName=BOLD_FONT, alignment=1, textColor=colors.HexColor("#2C3E50"))
+    page_header_style = ParagraphStyle('PageHeaderTitle', parent=styles['Normal'], fontSize=8.5, leading=11, fontName=BOLD_FONT, textColor=colors.HexColor("#1B4F72"), alignment=0)
     
     story = []
-    all_label_cells = []
-    
-    for group_key, items in grouped_receipts.items():
-        for item in items:
-            cell_elements = []
-            
-            cell_elements.append(Paragraph(f"<b>ALICI:</b> {item['recipient']}", recipient_style))
-            cell_elements.append(Paragraph(f"<b>ADRES:</b> {item['address']}", address_style))
-            
-            # Seçeneğe Göre Kargo Yazısını Göster veya Gizle
-            if sadece_gorsel_kargo:
-                cell_elements.append(Paragraph(f"Sipariş No: {item['order_no']}", order_style))
-            else:
-                cell_elements.append(Paragraph(f"Sipariş No: {item['order_no']} | <b>Kargo: {item['cargo_company']}</b>", order_style))
-            
-            # Kırpılan Kargo Logosunu Büyük ve Net Şekilde Ekleme
-            if item.get("cargo_logo_bytes"):
-                try:
-                    logo_io = BytesIO(item["cargo_logo_bytes"])
-                    pil_img = Image.open(BytesIO(item["cargo_logo_bytes"]))
-                    orig_w, orig_h = pil_img.size
-                    
-                    if orig_h > 0:
-                        aspect = orig_w / orig_h
+
+    # MOD 1: TASARRUF MODU (TÜM ETİKETLERİ BİRLEŞTİRİR, KAĞIT KAZANIR)
+    if duzen_modu == "Tasarruf Modu (Kağıttan Tasarruf Et)":
+        all_label_cells = []
+        for group_key, items in grouped_receipts.items():
+            for item in items:
+                cell_elements = []
+                cell_elements.append(Paragraph(f"<b>ALICI:</b> {item['recipient']}", recipient_style))
+                cell_elements.append(Paragraph(f"<b>ADRES:</b> {item['address']}", address_style))
+                
+                if sadece_gorsel_kargo:
+                    cell_elements.append(Paragraph(f"Sipariş No: {item['order_no']}", order_style))
+                else:
+                    cell_elements.append(Paragraph(f"Sipariş No: {item['order_no']} | <b>Kargo: {item['cargo_company']}</b>", order_style))
+                
+                if item.get("cargo_logo_bytes"):
+                    try:
+                        logo_io = BytesIO(item["cargo_logo_bytes"])
+                        pil_img = Image.open(BytesIO(item["cargo_logo_bytes"]))
+                        orig_w, orig_h = pil_img.size
+                        aspect = orig_w / orig_h if orig_h > 0 else 3.5
                         target_h = 36
                         target_w = min(150, int(target_h * aspect))
-                    else:
-                        target_w, target_h = 130, 36
-                        
-                    logo_img = RLImage(logo_io, width=target_w, height=target_h)
-                    cell_elements.append(Spacer(1, 2))
-                    cell_elements.append(logo_img)
-                except Exception:
-                    pass
+                        logo_img = RLImage(logo_io, width=target_w, height=target_h)
+                        cell_elements.append(Spacer(1, 2))
+                        cell_elements.append(logo_img)
+                    except Exception: pass
 
-            cell_elements.append(Spacer(1, 2))
-            
-            if item['cargo_barcode'] != "N/A":
-                try:
-                    bc = code128.Code128(item['cargo_barcode'], barHeight=32, barWidth=1.0)
-                    cell_elements.append(bc)
-                    cell_elements.append(Paragraph(f"{item['cargo_barcode']}", bc_text_style))
-                except: cell_elements.append(Paragraph(f"Kargo Kodu: {item['cargo_barcode']}", bc_text_style))
-            else:
-                cell_elements.append(Paragraph("<b>[Kargo Barkodu Okunamadı]</b>", recipient_style))
-
-            cell_elements.append(Spacer(1, 2))
-            if item["is_multi"]:
-                cell_elements.append(Paragraph("<b>⚠️ DİKKAT: ÇOKLU SİPARİŞ ⚠️</b>", multi_style))
                 cell_elements.append(Spacer(1, 2))
-            
-            products_html = ""
-            for p in item["products"]:
-                name = p['name'][:77] + "..." if len(p['name']) > 80 else p['name']
-                products_html += f"<font color='#2980B9'><b>• Ürün #{p['index']}:</b></font> {name}<br/>"
-                products_html += f"&nbsp;&nbsp;<b>Adet:</b> <font color='#C0392B'><b>{p['qty']}</b></font> | <b>Renk:</b> {p['color']} | <b>Beden:</b> {p['size']}<br/>"
-                products_html += f"&nbsp;&nbsp;<b>Barkod:</b> {p['barcode']} | <b>Stok Kodu:</b> {p['sku']}<br/><br/>"
+                if item['cargo_barcode'] != "N/A":
+                    try:
+                        bc = code128.Code128(item['cargo_barcode'], barHeight=32, barWidth=1.0)
+                        cell_elements.append(bc)
+                        cell_elements.append(Paragraph(f"{item['cargo_barcode']}", bc_text_style))
+                    except: cell_elements.append(Paragraph(f"Kargo Kodu: {item['cargo_barcode']}", bc_text_style))
+                else:
+                    cell_elements.append(Paragraph("<b>[Kargo Barkodu Okunamadı]</b>", recipient_style))
 
-            cell_elements.append(Paragraph(products_html.strip(), text_style))
-            all_label_cells.append(cell_elements)
+                cell_elements.append(Spacer(1, 2))
+                if item["is_multi"]:
+                    cell_elements.append(Paragraph("<b>⚠️ DİKKAT: ÇOKLU SİPARİŞ ⚠️</b>", multi_style))
+                    cell_elements.append(Spacer(1, 2))
+                
+                products_html = ""
+                for p in item["products"]:
+                    name = p['name'][:77] + "..." if len(p['name']) > 80 else p['name']
+                    products_html += f"<font color='#2980B9'><b>• Ürün #{p['index']}:</b></font> {name}<br/>"
+                    products_html += f"&nbsp;&nbsp;<b>Adet:</b> <font color='#C0392B'><b>{p['qty']}</b></font> | <b>Renk:</b> {p['color']} | <b>Beden:</b> {p['size']}<br/>"
+                    products_html += f"&nbsp;&nbsp;<b>Barkod:</b> {p['barcode']} | <b>Stok Kodu:</b> {p['sku']}<br/><br/>"
 
-    for i in range(0, len(all_label_cells), 6):
-        page_chunk = all_label_cells[i:i+6]
-        while len(page_chunk) < 6: page_chunk.append([Paragraph("", text_style)])
-        grid_matrix = [[page_chunk[0], page_chunk[1]], [page_chunk[2], page_chunk[3]], [page_chunk[4], page_chunk[5]]]
-        table = Table(grid_matrix, colWidths=[285, 285], rowHeights=[262, 262, 262])
-        table.setStyle(TableStyle([
-            ('BOX', (0,0), (-1,-1), 1.5, colors.HexColor("#34495E")),
-            ('INNERGRID', (0,0), (-1,-1), 0.6, colors.HexColor("#BDC3C7")),
-            ('BACKGROUND', (0,0), (-1,-1), colors.HexColor("#FFFFFF")),
-            ('VALIGN', (0,0), (-1,-1), 'TOP'),
-            ('TOPPADDING', (0,0), (-1,-1), 4), ('BOTTOMPADDING', (0,0), (-1,-1), 4),
-            ('LEFTPADDING', (0,0), (-1,-1), 6), ('RIGHTPADDING', (0,0), (-1,-1), 6),
-        ]))
-        story.append(table)
-        if i + 6 < len(all_label_cells): story.append(PageBreak())
+                cell_elements.append(Paragraph(products_html.strip(), text_style))
+                all_label_cells.append(cell_elements)
+
+        for i in range(0, len(all_label_cells), 6):
+            page_chunk = all_label_cells[i:i+6]
+            while len(page_chunk) < 6: page_chunk.append([Paragraph("", text_style)])
+            grid_matrix = [[page_chunk[0], page_chunk[1]], [page_chunk[2], page_chunk[3]], [page_chunk[4], page_chunk[5]]]
+            table = Table(grid_matrix, colWidths=[285, 285], rowHeights=[262, 262, 262])
+            table.setStyle(TableStyle([
+                ('BOX', (0,0), (-1,-1), 1.5, colors.HexColor("#34495E")),
+                ('INNERGRID', (0,0), (-1,-1), 0.6, colors.HexColor("#BDC3C7")),
+                ('BACKGROUND', (0,0), (-1,-1), colors.HexColor("#FFFFFF")),
+                ('VALIGN', (0,0), (-1,-1), 'TOP'),
+                ('TOPPADDING', (0,0), (-1,-1), 4), ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+                ('LEFTPADDING', (0,0), (-1,-1), 6), ('RIGHTPADDING', (0,0), (-1,-1), 6),
+            ]))
+            story.append(table)
+            if i + 6 < len(all_label_cells): story.append(PageBreak())
+
+    # MOD 2: ÜRÜN GRUBUNA GÖRE SAYFA SAYFA AYIRMA MODU
+    else:
+        total_groups = len(grouped_receipts)
+        g_counter = 0
+
+        for group_key, items in grouped_receipts.items():
+            g_counter += 1
+            label_cells = []
+
+            for item in items:
+                cell_elements = []
+                cell_elements.append(Paragraph(f"<b>ALICI:</b> {item['recipient']}", recipient_style))
+                cell_elements.append(Paragraph(f"<b>ADRES:</b> {item['address']}", address_style))
+                
+                if sadece_gorsel_kargo:
+                    cell_elements.append(Paragraph(f"Sipariş No: {item['order_no']}", order_style))
+                else:
+                    cell_elements.append(Paragraph(f"Sipariş No: {item['order_no']} | <b>Kargo: {item['cargo_company']}</b>", order_style))
+                
+                if item.get("cargo_logo_bytes"):
+                    try:
+                        logo_io = BytesIO(item["cargo_logo_bytes"])
+                        pil_img = Image.open(BytesIO(item["cargo_logo_bytes"]))
+                        orig_w, orig_h = pil_img.size
+                        aspect = orig_w / orig_h if orig_h > 0 else 3.5
+                        target_h = 36
+                        target_w = min(150, int(target_h * aspect))
+                        logo_img = RLImage(logo_io, width=target_w, height=target_h)
+                        cell_elements.append(Spacer(1, 2))
+                        cell_elements.append(logo_img)
+                    except Exception: pass
+
+                cell_elements.append(Spacer(1, 2))
+                if item['cargo_barcode'] != "N/A":
+                    try:
+                        bc = code128.Code128(item['cargo_barcode'], barHeight=32, barWidth=1.0)
+                        cell_elements.append(bc)
+                        cell_elements.append(Paragraph(f"{item['cargo_barcode']}", bc_text_style))
+                    except: cell_elements.append(Paragraph(f"Kargo Kodu: {item['cargo_barcode']}", bc_text_style))
+                else:
+                    cell_elements.append(Paragraph("<b>[Kargo Barkodu Okunamadı]</b>", recipient_style))
+
+                cell_elements.append(Spacer(1, 2))
+                if item["is_multi"]:
+                    cell_elements.append(Paragraph("<b>⚠️ DİKKAT: ÇOKLU SİPARİŞ ⚠️</b>", multi_style))
+                    cell_elements.append(Spacer(1, 2))
+                
+                products_html = ""
+                for p in item["products"]:
+                    name = p['name'][:77] + "..." if len(p['name']) > 80 else p['name']
+                    products_html += f"<font color='#2980B9'><b>• Ürün #{p['index']}:</b></font> {name}<br/>"
+                    products_html += f"&nbsp;&nbsp;<b>Adet:</b> <font color='#C0392B'><b>{p['qty']}</b></font> | <b>Renk:</b> {p['color']} | <b>Beden:</b> {p['size']}<br/>"
+                    products_html += f"&nbsp;&nbsp;<b>Barkod:</b> {p['barcode']} | <b>Stok Kodu:</b> {p['sku']}<br/><br/>"
+
+                cell_elements.append(Paragraph(products_html.strip(), text_style))
+                label_cells.append(cell_elements)
+
+            for i in range(0, len(label_cells), 6):
+                page_chunk = label_cells[i:i+6]
+                while len(page_chunk) < 6: page_chunk.append([Paragraph("", text_style)])
+
+                display_group_name = group_key if len(group_key) <= 90 else group_key[:87] + "..."
+                story.append(Paragraph(f"<b>Ürün Grubu:</b> {display_group_name}", page_header_style))
+                story.append(Spacer(1, 3))
+
+                grid_matrix = [[page_chunk[0], page_chunk[1]], [page_chunk[2], page_chunk[3]], [page_chunk[4], page_chunk[5]]]
+                table = Table(grid_matrix, colWidths=[285, 285], rowHeights=[252, 252, 252])
+                table.setStyle(TableStyle([
+                    ('BOX', (0,0), (-1,-1), 1.5, colors.HexColor("#34495E")),
+                    ('INNERGRID', (0,0), (-1,-1), 0.6, colors.HexColor("#BDC3C7")),
+                    ('BACKGROUND', (0,0), (-1,-1), colors.HexColor("#FFFFFF")),
+                    ('VALIGN', (0,0), (-1,-1), 'TOP'),
+                    ('TOPPADDING', (0,0), (-1,-1), 4), ('BOTTOMPADDING', (0,0), (-1,-1), 4),
+                    ('LEFTPADDING', (0,0), (-1,-1), 6), ('RIGHTPADDING', (0,0), (-1,-1), 6),
+                ]))
+                story.append(table)
+                if i + 6 < len(label_cells) or g_counter < total_groups:
+                    story.append(PageBreak())
 
     doc.build(story)
 
 # ==========================================
-# 6. KULLANICI ARAYÜZÜ
+# 6. KULLANICI ARAYÜZÜ (STREAMLIT)
 # ==========================================
 if 'processed_data' not in st.session_state: st.session_state.processed_data = None
 if 'raw_debug_texts' not in st.session_state: st.session_state.raw_debug_texts = None
 if 'debug_mode' not in st.session_state: st.session_state.debug_mode = False
 
-st.sidebar.header("⚙️ Ayarlar")
-sadece_gorsel_kargo = st.sidebar.checkbox("Kargo Adını Yazma (Sadece Görseli Göster)", value=True, help="Hatalı metin çıktısını önlemek için kargo firması adını metin olarak yazmaz, sadece kırpılan büyük logo resmini basar.")
+st.sidebar.header("⚙️ Baskı ve Yerleşim Ayarları")
 
-uploaded_files = st.file_uploader("PDF Yükleyin", type=["pdf"], accept_multiple_files=True)
+duzen_modu = st.sidebar.radio(
+    "Etiket Dizilim Modu Seçin:",
+    [
+        "Tasarruf Modu (Kağıttan Tasarruf Et)",
+        "Ürün İsmine Göre Sayfala (Depo Hazırlama)"
+    ],
+    index=0,
+    help="Tasarruf Modu etiketleri aralık bırakmadan birleştirir. Ürün İsmine Göre Sayfalama modu ise aynı ürünü alan siparişleri tek sayfaya toplayarak paketlemeyi kolaylaştırır."
+)
+
+sadece_gorsel_kargo = st.sidebar.checkbox(
+    "Kargo Adını Yazma (Sadece Görsel Logosunu Bas)", 
+    value=True, 
+    help="Hatalı kargo yazısı çıktısını önler, etikete sadece kargo şirketinin orijinal kırpılmış görsel logosunu basar."
+)
+
+uploaded_files = st.file_uploader("Trendyol Fiş/Etiket PDF'lerini Seçin", type=["pdf"], accept_multiple_files=True)
 
 if uploaded_files:
-    if st.button("Verileri Oku ve Tabloyu Oluştur"):
-        with st.spinner("PDF'ler renk analizli engine ile işleniyor..."):
+    if st.button("Etiketleri Dönüştür ve Hazırla"):
+        with st.spinner("PDF'ler kural tabanlı engine ile analiz ediliyor..."):
             all_orders, all_raw_texts = [], []
             with tempfile.TemporaryDirectory() as temp_dir:
                 for uf in uploaded_files:
@@ -411,7 +483,7 @@ if uploaded_files:
 
 if st.session_state.processed_data:
     st.markdown("---")
-    st.subheader("👀 Tüm Siparişlerin Önizlemesi")
+    st.subheader("👀 Tüm Siparişlerin Önizlemesi (%100 Gerçek Adetler & Kargo Tespiti)")
     
     preview_data = []
     for ord_item in st.session_state.processed_data:
@@ -441,10 +513,10 @@ if st.session_state.processed_data:
                 for ord_item in st.session_state.processed_data:
                     grouped[ord_item["group_key"]].append(ord_item)
                 
-                build_grouped_a4_pdf(grouped, output_pdf_path, sadece_gorsel_kargo)
+                build_grouped_a4_pdf(grouped, output_pdf_path, duzen_modu, sadece_gorsel_kargo)
                 
                 with open(output_pdf_path, "rb") as f: pdf_bytes = f.read()
-                st.download_button(label="📥 Etiket PDF'ini İndir", data=pdf_bytes, file_name="Hazir_Etiketler.pdf", mime="application/pdf")
+                st.download_button(label="📥 Etiket PDF'ini İndir", data=pdf_bytes, file_name="Stil_Sahibi_Baski_Etiketler.pdf", mime="application/pdf")
     
     with c2:
         if st.button("🛠️ Cropping & Logo Tespiti Kontrolü (Debug Modu)"):
