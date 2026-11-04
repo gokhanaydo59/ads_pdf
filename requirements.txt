@@ -1,5 +1,6 @@
 streamlit
 pdfplumber
+pdfminer.six
 pdf2image
 pyzbar
 reportlab
