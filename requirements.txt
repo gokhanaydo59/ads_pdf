@@ -3,3 +3,5 @@ pdfplumber
 pdf2image
 pyzbar
 reportlab
+pytesseract
+Pillow
