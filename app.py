@@ -29,7 +29,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 # 1. ARAYÜZ VE TÜRKÇE FONT AYARLARI
 # ==========================================
 st.set_page_config(page_title="Trendyol Etiket Düzenleyici", page_icon="📦", layout="wide")
-st.title("📦 Trendyol Toplu Etiket (Kural Tabanlı & Sıfır Hata Engine)")
+st.title("📦 Trendyol Toplu Etiket")
 
 @st.cache_resource
 def load_turkish_fonts():
