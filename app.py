@@ -2,6 +2,7 @@ import os
 import re
 import tempfile
 import urllib.request
+from io import BytesIO
 from collections import defaultdict
 import streamlit as st
 import pdfplumber
@@ -15,7 +16,7 @@ except ImportError:
     pytesseract = None
 
 from reportlab.lib.pagesizes import A4
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, PageBreak, Paragraph, Spacer
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, PageBreak, Paragraph, Spacer, Image as RLImage
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.graphics.barcode import code128
@@ -26,7 +27,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 # 1. ARAYÜZ VE TÜRKÇE FONT AYARLARI
 # ==========================================
 st.set_page_config(page_title="Trendyol Etiket Düzenleyici", page_icon="📦", layout="wide")
-st.title("📦 Trendyol Toplu Etiket (Cropping & Kargo Logo Tespiti)")
+st.title("📦 Trendyol Toplu Etiket (Hassas Cropping & Logo Basımı)")
 
 @st.cache_resource
 def load_turkish_fonts():
@@ -49,28 +50,30 @@ def fix_tr(text):
     return text.replace('\n', ' ').strip()
 
 # ==========================================
-# 2. BÖLGESEL KIRPMA (CROPPING) & KARGO TESPİTİ
+# 2. HASSAS BÖLGESEL KIRPMA (CROPPING)
 # ==========================================
 def detect_cargo_company_from_crop(page_img):
     """
-    PDF sayfasının sağ üst köşesinden kargo logosunun olduğu bölgeyi kırpar
-    ve OCR / metin taraması ile kargo firmasını tespit eder.
+    PDF sayfasının kargo logosu bölgesini (daha aşağı kaydırılmış koordinatlarla) kırpar.
     """
     if not page_img:
-        return "Bilinmiyor", None
+        return "Bilinmiyor", None, None
 
     width, height = page_img.size
     
-    # Trendyol Etiketi Sağ Üst Köşe Kırpma Alanı (Sağ %25, Üst %18)
-    # Box: (sol, üst, sağ, alt)
-    crop_box = (int(width * 0.72), int(height * 0.02), int(width * 0.98), int(height * 0.18))
+    # DİKEY KOORDİNAT AŞAĞIYA KAYDIRILDI (Y: %5 - %25 arası)
+    crop_box = (int(width * 0.70), int(height * 0.05), int(width * 0.99), int(height * 0.25))
     cropped_img = page_img.crop(crop_box)
+
+    # Logoyu PDF etiketine koyabilmek için byte'a çeviriyoruz
+    img_byte_arr = BytesIO()
+    cropped_img.save(img_byte_arr, format='PNG')
+    cargo_logo_bytes = img_byte_arr.getvalue()
 
     cargo_name = "Bilinmiyor"
     
     if pytesseract:
         try:
-            # Kırpılan logodan metin oku
             ocr_text = pytesseract.image_to_string(cropped_img, lang='tur+eng').upper()
             
             if "PTT" in ocr_text:
@@ -92,7 +95,7 @@ def detect_cargo_company_from_crop(page_img):
         except Exception:
             pass
 
-    return cargo_name, cropped_img
+    return cargo_name, cropped_img, cargo_logo_bytes
 
 # ==========================================
 # 3. PDF İŞLEME VE VERİ ÇEKME
@@ -111,10 +114,9 @@ def extract_order_data_from_pdf(pdf_path):
             text = page.extract_text() or ""
             page_img = images[page_num] if page_num < len(images) else None
 
-            # 1. Kargo Logosunu Kırpma ve Tespit Etme
-            cargo_company, cropped_logo = detect_cargo_company_from_crop(page_img)
+            # Kargo Logosunu Kırpma ve Tespit Etme
+            cargo_company, cropped_logo, cargo_logo_bytes = detect_cargo_company_from_crop(page_img)
 
-            # Eğer OCR ile bulunamadıysa metin içindeki yedek tarama
             if cargo_company == "Bilinmiyor":
                 text_upper = text.upper()
                 if "PTT" in text_upper: cargo_company = "PTT Kargo"
@@ -129,7 +131,6 @@ def extract_order_data_from_pdf(pdf_path):
                 "detected_cargo": cargo_company
             })
 
-            # Sipariş No, Ad, Adres, Barkod
             order_no = "N/A"
             s_match = re.search(r'Sipariş No\s*[:\|]?\s*(\d+)', text)
             if s_match: order_no = s_match.group(1).strip()
@@ -153,7 +154,6 @@ def extract_order_data_from_pdf(pdf_path):
                     if decoded: cargo_bc = decoded[0].data.decode('utf-8')
                 except: pass
 
-            # Ürün Bilgileri
             products = []
             if "Ürün Bilgileri" in text:
                 prod_section = text.split("Ürün Bilgileri", 1)[1].strip()
@@ -216,15 +216,21 @@ def extract_order_data_from_pdf(pdf_path):
             is_multi = len(products) > 1 or total_qty > 1
             
             orders_on_page.append({
-                "order_no": order_no, "recipient": recipient, "address": address,
-                "cargo_barcode": cargo_bc, "cargo_company": cargo_company, "products": products, "is_multi": is_multi, 
+                "order_no": order_no, 
+                "recipient": recipient, 
+                "address": address,
+                "cargo_barcode": cargo_bc, 
+                "cargo_company": cargo_company, 
+                "cargo_logo_bytes": cargo_logo_bytes,
+                "products": products, 
+                "is_multi": is_multi, 
                 "group_key": products[0]["name"] if products else "Diger_Urunler"
             })
 
     return orders_on_page, raw_texts
 
 # ==========================================
-# 4. PDF OLUŞTURMA FONKSİYONU
+# 4. PDF OLUŞTURMA (GÖRSEL LOGO DESTEKLİ)
 # ==========================================
 def build_grouped_a4_pdf(grouped_receipts, output_pdf_path, tasarruf_modu):
     doc = SimpleDocTemplate(output_pdf_path, pagesize=A4, leftMargin=12, rightMargin=12, topMargin=8, bottomMargin=8)
@@ -243,14 +249,30 @@ def build_grouped_a4_pdf(grouped_receipts, output_pdf_path, tasarruf_modu):
     for group_key, items in grouped_receipts.items():
         for item in items:
             cell_elements = []
+            
+            # 1. Alıcı ve Adres
             cell_elements.append(Paragraph(f"<b>ALICI:</b> {item['recipient']}", recipient_style))
             cell_elements.append(Paragraph(f"<b>ADRES:</b> {item['address']}", address_style))
+            
+            # 2. Sipariş No ve Kargo Bilgisi
             cell_elements.append(Paragraph(f"Sipariş No: {item['order_no']} | <b>Kargo: {item['cargo_company']}</b>", order_style))
+            
+            # 3. KIRPILAN ORİJİNAL KARGO LOGOSUNU ETIKETE BASMA (Operatörler için)
+            if item.get("cargo_logo_bytes"):
+                try:
+                    logo_io = BytesIO(item["cargo_logo_bytes"])
+                    logo_img = RLImage(logo_io, width=70, height=22)
+                    cell_elements.append(Spacer(1, 1))
+                    cell_elements.append(logo_img)
+                except Exception:
+                    pass
+
             cell_elements.append(Spacer(1, 2))
             
+            # 4. Kargo Barkodu
             if item['cargo_barcode'] != "N/A":
                 try:
-                    bc = code128.Code128(item['cargo_barcode'], barHeight=42, barWidth=1.1)
+                    bc = code128.Code128(item['cargo_barcode'], barHeight=38, barWidth=1.1)
                     cell_elements.append(bc)
                     cell_elements.append(Paragraph(f"{item['cargo_barcode']}", bc_text_style))
                 except: cell_elements.append(Paragraph(f"Kargo Kodu: {item['cargo_barcode']}", bc_text_style))
@@ -262,6 +284,7 @@ def build_grouped_a4_pdf(grouped_receipts, output_pdf_path, tasarruf_modu):
                 cell_elements.append(Paragraph("<b>⚠️ DİKKAT: ÇOKLU SİPARİŞ ⚠️</b>", multi_style))
                 cell_elements.append(Spacer(1, 2))
             
+            # 5. Ürün Bilgileri
             products_html = ""
             for p in item["products"]:
                 name = p['name'][:77] + "..." if len(p['name']) > 80 else p['name']
@@ -291,7 +314,7 @@ def build_grouped_a4_pdf(grouped_receipts, output_pdf_path, tasarruf_modu):
     doc.build(story)
 
 # ==========================================
-# 5. KULLANICI ARAYÜZÜ (TABLO & CROPPING DEBUG)
+# 5. KULLANICI ARAYÜZÜ (ÖNİZLEME VE DEBUG)
 # ==========================================
 if 'processed_data' not in st.session_state: st.session_state.processed_data = None
 if 'raw_debug_texts' not in st.session_state: st.session_state.raw_debug_texts = None
@@ -368,7 +391,7 @@ if st.session_state.processed_data:
         
         st.write(f"**Tespit Edilen Kargo:** `{page_info['detected_cargo']}`")
         if page_info['cropped_img']:
-            st.write("**Sayfadan Kırpılan Kargo Logosu Bölgesi:**")
-            st.image(page_info['cropped_img'], width=250)
+            st.write("**Sayfadan Kırpılan Yeni Logo Bölgesi:**")
+            st.image(page_info['cropped_img'], width=280)
             
         st.text_area("Sayfa Ham Metni", page_info["text"], height=200)
