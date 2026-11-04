@@ -17,7 +17,7 @@ from reportlab.graphics.barcode import code128
 st.set_page_config(page_title="Trendyol Etiket Düzenleyici", page_icon="📦", layout="centered")
 
 st.title("📦 Trendyol Toplu Etiket ve Fiş Dönüştürücü")
-st.write("Trendyol güncel etiket şablonu için optimize edildi; adres, barkod ve ürün bilgileri eksiksiz olarak düzenlenmektedir.")
+st.write("Trendyol güncel şablonu için optimize edildi; ürün adı ve adres sorunları giderildi.")
 
 # Yan Menü (Sidebar) Ayarları
 st.sidebar.header("⚙️ Baskı Ayarları")
@@ -70,7 +70,7 @@ def extract_order_data_from_pdf(pdf_path):
             if r_match:
                 recipient = fix_tr(re.sub(r'^[:\s]+', '', r_match.group(1)).strip().replace('\n', ' '))
 
-            # 3. Adres Bilgisi (Yeni şablona uyumlu esnek arama)
+            # 3. Adres Bilgisi
             address = "N/A"
             a_match = re.search(r'Adres\s*[:\|]?\s*(.*?)(?=\n\s*Çıkış|\n\s*Ürün Bilgileri|\n\s*Fatura|$)', text, re.DOTALL)
             if a_match:
@@ -92,50 +92,43 @@ def extract_order_data_from_pdf(pdf_path):
                 except Exception:
                     pass
 
-            # 5. Ürün Bilgileri (Güncel Şablon Uyumlu Esnek Parçalama)
+            # 5. Ürün Bilgileri (Güncel Şablon İçin Güçlendirilmiş Parçalama)
             products = []
             if "Ürün Bilgileri" in text:
                 prod_section = text.split("Ürün Bilgileri", 1)[1].strip()
-                
-                # Satırlara böl ve ürün bloklarını ayıkla
                 lines = [l.strip() for l in prod_section.split('\n') if l.strip()]
                 
-                current_product_name = ""
                 product_counter = 1
-                
                 i = 0
                 while i < len(lines):
                     line = lines[i]
                     
-                    # Ürün sıra numarası ile başlıyorsa (Örn: "1") veya yeni ürün satırı algılandığında
-                    if re.match(r'^\d+\s*$', line) or (i + 1 < len(lines) and "Adet" in lines[min(i+1, len(lines)-1)]):
-                        # Önceki biriken ürünü kaydet
-                        i += 1
-                        continue
-                    
-                    # Eğer satır standart ürün bilgilerini içeriyorsa
-                    if "Adet" in line or "Tek Ebat" in line or re.search(r'\d{10,}', line):
-                        # Bu satırdan hemen önceki metin ürün adıdır
-                        if i > 0:
-                            potential_name = lines[i-1]
-                            if not "Adet" in potential_name and not "Barkod" in potential_name:
-                                current_product_name = fix_tr(potential_name)
+                    # Eğer satırda "Adet" geçiyorsa veya standart bir ürün detay satırıysa
+                    if "Adet" in line or "Tek Ebat" in line or "Adet" in line.lower():
+                        # Bu satırdan hemen önceki anlamlı metin ürün adıdır
+                        product_name = "Trendyol Urunu"
+                        for lookback in range(1, 4):
+                            if i - lookback >= 0:
+                                candidate = lines[i - lookback]
+                                # Sayısal sıra numaralarını veya başlıkları atla
+                                if candidate and not re.match(r'^\d+$', candidate) and not "Ürün" in candidate and not "Adet" in candidate:
+                                    product_name = fix_tr(candidate)
+                                    break
                         
                         tokens = [t for t in line.split() if t != "-1"]
                         qty, color, size, barcode, sku = "1 Adet", "-", "Tek Ebat", "-", "-"
                         
-                        # Token'ları akıllıca çözümle
                         for idx, tok in enumerate(tokens):
                             if "adet" in tok.lower() and idx > 0:
                                 qty = f"{tokens[idx-1]} {tok}"
                             elif tok.isdigit() and len(tok) >= 12:
                                 barcode = tok
-                            elif tok.startswith("TYC") or tok.startswith("AD") or len(tok) > 12:
+                            elif tok.startswith("TYC") or tok.startswith("AD") or len(tok) > 10:
                                 sku = tok
 
                         products.append({
                             "index": str(product_counter),
-                            "name": current_product_name if current_product_name else "Urun Adi Bulunamadi",
+                            "name": product_name,
                             "qty": qty,
                             "color": color,
                             "size": size,
@@ -145,14 +138,11 @@ def extract_order_data_from_pdf(pdf_path):
                         product_counter += 1
                     i += 1
 
-            # Eğer yukarıdaki detaylı yakalama boş döndüyse metinden alternatif ürün adı çek
+            # Eğer ürün listesi boş kalırsa metinden alternatif olarak çekmeye çalış
             if not products:
-                # Genel metin içinden ürün adını yakala
-                fallback_name_match = re.search(r'\d+\s+(.*?)\s+Adet', text)
-                f_name = fix_tr(fallback_name_match.group(1)) if fallback_name_match else "Trendyol Urunu"
                 products.append({
                     "index": "1",
-                    "name": f_name,
+                    "name": fix_tr(recipient) + " Siparişi",
                     "qty": "1 Adet",
                     "color": "-",
                     "size": "Tek Ebat",
@@ -368,7 +358,7 @@ if uploaded_files:
                     st.download_button(
                         label="📥 Düzenlenmiş PDF Çıktısını İndir",
                         data=pdf_bytes,
-                        file_name="Stil_Sahibi_Baski_Etiketler.pdf",
+                        file_name="adsbarkod.pdf",
                         mime="application/pdf"
                     )
                 else:
