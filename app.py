@@ -387,7 +387,7 @@ if uploaded_files:
 
 if st.session_state.processed_data:
     st.markdown("---")
-    st.subheader("👀 Tüm Siparişlerin Önizlemesi (%100 Gerçek Adetler & Kargo Tespiti)")
+    st.subheader("👀 Tüm Siparişlerin Önizlemesi ")
     
     preview_data = []
     for ord_item in st.session_state.processed_data:
