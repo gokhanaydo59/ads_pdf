@@ -24,7 +24,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 # 1. ARAYÜZ VE TÜRKÇE FONT AYARLARI
 # ==========================================
 st.set_page_config(page_title="Trendyol Etiket Düzenleyici", page_icon="📦", layout="wide")
-st.title("📦 Trendyol Toplu Etiket ve Fiş Dönüştürücü")
+st.title("📦 Trendyol Toplu Etiket & Sayfa Birleştirme Kontrol Paneli")
 
 @st.cache_resource
 def load_turkish_fonts():
@@ -50,7 +50,6 @@ def fix_tr(text):
 # 2. RENK ANALİZİ İLE KARGO TESPİT MOTORU
 # ==========================================
 def detect_cargo_by_color_analysis(cropped_pil_img):
-    """Kırpılan logonun piksellerindeki RGB renk dağılımını analiz eder."""
     if not cropped_pil_img:
         return "Görselden Kontrol Edin"
 
@@ -273,7 +272,7 @@ def extract_order_data_from_pdf(pdf_path):
     return orders_on_page, raw_texts
 
 # ==========================================
-# 5. DÜZENLİ PDF BASTIRMA (GRUP / TASARRUF MODLU)
+# 5. DÜZENLİ PDF BASTIRMA
 # ==========================================
 def build_grouped_a4_pdf(grouped_receipts, output_pdf_path, duzen_modu, sadece_gorsel_kargo):
     doc = SimpleDocTemplate(output_pdf_path, pagesize=A4, leftMargin=12, rightMargin=12, topMargin=8, bottomMargin=8)
@@ -289,7 +288,7 @@ def build_grouped_a4_pdf(grouped_receipts, output_pdf_path, duzen_modu, sadece_g
     
     story = []
 
-    # MOD 1: TASARRUF MODU (TÜM ETİKETLERİ BİRLEŞTİRİR, KAĞIT KAZANIR)
+    # MOD 1: TASARRUF MODU
     if duzen_modu == "Tasarruf Modu (Kağıttan Tasarruf Et)":
         all_label_cells = []
         for group_key, items in grouped_receipts.items():
@@ -453,8 +452,8 @@ duzen_modu = st.sidebar.radio(
         "Tasarruf Modu (Kağıttan Tasarruf Et)",
         "Ürün İsmine Göre Sayfala (Depo Hazırlama)"
     ],
-    index=0,
-    help="Tasarruf Modu etiketleri aralık bırakmadan birleştirir. Ürün İsmine Göre Sayfalama modu ise aynı ürünü alan siparişleri tek sayfaya toplayarak paketlemeyi kolaylaştırır."
+    index=1,
+    help="Tasarruf Modu etiketleri aralık bırakmadan birleştirir. Ürün İsmine Göre Sayfalama modu ise seçtiğiniz ürün gruplarına göre ayrı sayfalar oluşturur."
 )
 
 sadece_gorsel_kargo = st.sidebar.checkbox(
@@ -466,7 +465,7 @@ sadece_gorsel_kargo = st.sidebar.checkbox(
 uploaded_files = st.file_uploader("Trendyol Fiş/Etiket PDF'lerini Seçin", type=["pdf"], accept_multiple_files=True)
 
 if uploaded_files:
-    if st.button("Etiketleri Dönüştür ve Hazırla"):
+    if st.button("Verileri Oku ve Analiz Et"):
         with st.spinner("PDF'ler kural tabanlı engine ile analiz ediliyor..."):
             all_orders, all_raw_texts = [], []
             with tempfile.TemporaryDirectory() as temp_dir:
@@ -483,7 +482,61 @@ if uploaded_files:
 
 if st.session_state.processed_data:
     st.markdown("---")
-    st.subheader("👀 Tüm Siparişlerin Önizlemesi (%100 Gerçek Adetler & Kargo Tespiti)")
+    
+    # Ham Grupları Hazırlama
+    raw_groups = defaultdict(list)
+    for ord_item in st.session_state.processed_data:
+        raw_groups[ord_item["group_key"]].append(ord_item)
+
+    final_grouped_receipts = defaultdict(list)
+
+    # -------------------------------------------------------------
+    # SAYFA VE ÜRÜN BİRLEŞTİRME KONTROL PANELİ
+    # -------------------------------------------------------------
+    if duzen_modu == "Ürün İsmine Göre Sayfala (Depo Hazırlama)":
+        st.subheader("🎛️ Sayfa ve Ürün Gruplama Kontrol Paneli")
+        st.info("Aşağıdan istediğiniz ürün gruplarını seçerek tek sayfada/rupta birleştirebilir veya hepsini ayrı tutabilirsiniz.")
+
+        all_product_keys = list(raw_groups.keys())
+        
+        c_p1, c_p2 = st.columns([1, 1])
+        
+        with c_p1:
+            st.markdown("#### 1. Özel Birleştirilecek Ürünleri Seçin")
+            selected_to_merge = st.multiselect(
+                "Aşağıdaki ürünleri TEK BİR SAYFADA/GRUPTA birleştir:",
+                options=all_product_keys,
+                format_func=lambda x: f"{x[:60]}... ({len(raw_groups[x])} Adet Etiket)"
+            )
+            
+            merged_custom_title = st.text_input("Birleştirilen Grubun Sayfa Başlığı:", value="Birleştirilmiş Az Adetli Ürünler")
+
+        with c_p2:
+            st.markdown("#### 2. Canlı Sayfa Düzen Özeti")
+            
+            # Gruplama Mantığını Uygula
+            for p_key in all_product_keys:
+                if p_key in selected_to_merge:
+                    final_grouped_receipts[merged_custom_title].extend(raw_groups[p_key])
+                else:
+                    final_grouped_receipts[p_key].extend(raw_groups[p_key])
+
+            summary_rows = []
+            for g_title, g_items in final_grouped_receipts.items():
+                summary_rows.append({
+                    "Sayfa Grubu Başlığı": g_title[:50] + "..." if len(g_title) > 50 else g_title,
+                    "Etiket Sayısı": len(g_items),
+                    "Tahmini Sayfa Sayısı": (len(g_items) + 5) // 6
+                })
+            
+            st.dataframe(summary_rows, use_container_width=True)
+
+    else:
+        # Tasarruf modunda tüm ürünler tek havuza girer
+        final_grouped_receipts = raw_groups
+
+    st.markdown("---")
+    st.subheader("👀 Tüm Siparişlerin Önizleme Tablosu")
     
     preview_data = []
     for ord_item in st.session_state.processed_data:
@@ -506,14 +559,11 @@ if st.session_state.processed_data:
     c1, c2 = st.columns(2)
     
     with c1:
-        if st.button("✅ Her Şey Doğru, PDF'i İndir", type="primary"):
+        if st.button("✅ Tasarımı Onayla ve PDF'i İndir", type="primary"):
             with tempfile.TemporaryDirectory() as temp_dir:
                 output_pdf_path = os.path.join(temp_dir, "Baski_Etiketler.pdf")
-                grouped = defaultdict(list)
-                for ord_item in st.session_state.processed_data:
-                    grouped[ord_item["group_key"]].append(ord_item)
                 
-                build_grouped_a4_pdf(grouped, output_pdf_path, duzen_modu, sadece_gorsel_kargo)
+                build_grouped_a4_pdf(final_grouped_receipts, output_pdf_path, duzen_modu, sadece_gorsel_kargo)
                 
                 with open(output_pdf_path, "rb") as f: pdf_bytes = f.read()
                 st.download_button(label="📥 Etiket PDF'ini İndir", data=pdf_bytes, file_name="Stil_Sahibi_Baski_Etiketler.pdf", mime="application/pdf")
