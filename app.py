@@ -24,7 +24,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 # 1. ARAYÜZ VE TÜRKÇE FONT AYARLARI
 # ==========================================
 st.set_page_config(page_title="Trendyol Etiket Düzenleyici", page_icon="📦", layout="wide")
-st.title("📦 Trendyol Toplu Etiket & Sayfa Birleştirme Kontrol Paneli")
+st.title("📦 Trendyol Toplu Etiket (6 Etiket Sınırı & Hızlı Dizme Şablonları)")
 
 @st.cache_resource
 def load_turkish_fonts():
@@ -272,7 +272,7 @@ def extract_order_data_from_pdf(pdf_path):
     return orders_on_page, raw_texts
 
 # ==========================================
-# 5. DÜZENLİ PDF BASTIRMA
+# 5. DÜZENLİ PDF BASTIRMA (6 KURALI GARANTİLİ)
 # ==========================================
 def build_grouped_a4_pdf(grouped_receipts, output_pdf_path, duzen_modu, sadece_gorsel_kargo):
     doc = SimpleDocTemplate(output_pdf_path, pagesize=A4, leftMargin=12, rightMargin=12, topMargin=8, bottomMargin=8)
@@ -340,6 +340,7 @@ def build_grouped_a4_pdf(grouped_receipts, output_pdf_path, duzen_modu, sadece_g
                 cell_elements.append(Paragraph(products_html.strip(), text_style))
                 all_label_cells.append(cell_elements)
 
+        # Tam olarak 6'şar 6'şar ayır
         for i in range(0, len(all_label_cells), 6):
             page_chunk = all_label_cells[i:i+6]
             while len(page_chunk) < 6: page_chunk.append([Paragraph("", text_style)])
@@ -413,12 +414,15 @@ def build_grouped_a4_pdf(grouped_receipts, output_pdf_path, duzen_modu, sadece_g
                 cell_elements.append(Paragraph(products_html.strip(), text_style))
                 label_cells.append(cell_elements)
 
+            # BİR GRUPTA 6'DAN FAZLA ETİKET VARSA SAYFAYA BÖLME KANUNU
+            sub_page_idx = 1
             for i in range(0, len(label_cells), 6):
                 page_chunk = label_cells[i:i+6]
                 while len(page_chunk) < 6: page_chunk.append([Paragraph("", text_style)])
 
-                display_group_name = group_key if len(group_key) <= 90 else group_key[:87] + "..."
-                story.append(Paragraph(f"<b>Ürün Grubu:</b> {display_group_name}", page_header_style))
+                page_suffix = f" (Sayfa {sub_page_idx})" if len(label_cells) > 6 else ""
+                display_group_name = group_key if len(group_key) <= 80 else group_key[:77] + "..."
+                story.append(Paragraph(f"<b>Ürün Grubu:</b> {display_group_name}{page_suffix}", page_header_style))
                 story.append(Spacer(1, 3))
 
                 grid_matrix = [[page_chunk[0], page_chunk[1]], [page_chunk[2], page_chunk[3]], [page_chunk[4], page_chunk[5]]]
@@ -434,6 +438,7 @@ def build_grouped_a4_pdf(grouped_receipts, output_pdf_path, duzen_modu, sadece_g
                 story.append(table)
                 if i + 6 < len(label_cells) or g_counter < total_groups:
                     story.append(PageBreak())
+                sub_page_idx += 1
 
     doc.build(story)
 
@@ -494,27 +499,50 @@ if st.session_state.processed_data:
     # SAYFA VE ÜRÜN BİRLEŞTİRME KONTROL PANELİ
     # -------------------------------------------------------------
     if duzen_modu == "Ürün İsmine Göre Sayfala (Depo Hazırlama)":
-        st.subheader("🎛️ Sayfa ve Ürün Gruplama Kontrol Paneli")
-        st.info("Aşağıdan istediğiniz ürün gruplarını seçerek tek sayfada/rupta birleştirebilir veya hepsini ayrı tutabilirsiniz.")
+        st.subheader("🎛️ Sayfa ve Ürün Gruplama Kontrol Paneli (Max 6 Etiket / Sayfa)")
+        
+        # HIZLI DİZME ŞABLONLARI (QUICK TEMPLATES)
+        st.markdown("##### ⚡ Hızlı Dizme Şablonları")
+        template_choice = st.radio(
+            "Birleştirme Şablonu Seçin:",
+            [
+                "Özel / Manuel Seçim",
+                "⚡ Sadece 1 Adet Siparişi Olan Tüm Ürünleri Birleştir",
+                "⚡ 2 ve Altında Siparişi Olan Ürünleri Birleştir"
+            ],
+            horizontal=True
+        )
 
         all_product_keys = list(raw_groups.keys())
-        
+        selected_to_merge = []
+
+        if template_choice == "⚡ Sadece 1 Adet Siparişi Olan Tüm Ürünleri Birleştir":
+            selected_to_merge = [k for k in all_product_keys if len(raw_groups[k]) == 1]
+            st.success(f"Sistem otomatik olarak {len(selected_to_merge)} farklı tekil ürün etiketini tespit etti ve birleştirdi.")
+        elif template_choice == "⚡ 2 ve Altında Siparişi Olan Ürünleri Birleştir":
+            selected_to_merge = [k for k in all_product_keys if len(raw_groups[k]) <= 2]
+            st.success(f"Sistem otomatik olarak {len(selected_to_merge)} az adetli ürün etiketini tespit etti ve birleştirdi.")
+
         c_p1, c_p2 = st.columns([1, 1])
         
         with c_p1:
-            st.markdown("#### 1. Özel Birleştirilecek Ürünleri Seçin")
-            selected_to_merge = st.multiselect(
-                "Aşağıdaki ürünleri TEK BİR SAYFADA/GRUPTA birleştir:",
-                options=all_product_keys,
-                format_func=lambda x: f"{x[:60]}... ({len(raw_groups[x])} Adet Etiket)"
-            )
+            st.markdown("#### 1. Birleştirilecek Ürün Grubu Ayarları")
             
-            merged_custom_title = st.text_input("Birleştirilen Grubun Sayfa Başlığı:", value="Birleştirilmiş Az Adetli Ürünler")
+            if template_choice == "Özel / Manuel Seçim":
+                selected_to_merge = st.multiselect(
+                    "Aşağıdaki ürünleri TEK BİR SAYFA/GRUPTA birleştir:",
+                    options=all_product_keys,
+                    format_func=lambda x: f"{x[:60]}... ({len(raw_groups[x])} Adet Etiket)"
+                )
+            else:
+                st.info(f"Seçili Şablon Gereği {len(selected_to_merge)} Ürün Birleştiriliyor.")
+
+            merged_custom_title = st.text_input("Birleştirilen Grubun Sayfa Başlığı:", value="Birleştirilmiş Tekil Siparişler")
 
         with c_p2:
-            st.markdown("#### 2. Canlı Sayfa Düzen Özeti")
+            st.markdown("#### 2. Canlı Sayfa Düzen Özeti (Maksimum 6/Sayfa)")
             
-            # Gruplama Mantığını Uygula
+            # Gruplama Mantığını Uygula (6 Sınırına Göre Taşımalı)
             for p_key in all_product_keys:
                 if p_key in selected_to_merge:
                     final_grouped_receipts[merged_custom_title].extend(raw_groups[p_key])
@@ -523,16 +551,18 @@ if st.session_state.processed_data:
 
             summary_rows = []
             for g_title, g_items in final_grouped_receipts.items():
+                label_count = len(g_items)
+                page_count = (label_count + 5) // 6  # 6 etiket dolunca otomatik yeni sayfa hesabı
                 summary_rows.append({
-                    "Sayfa Grubu Başlığı": g_title[:50] + "..." if len(g_title) > 50 else g_title,
-                    "Etiket Sayısı": len(g_items),
-                    "Tahmini Sayfa Sayısı": (len(g_items) + 5) // 6
+                    "Sayfa Grubu Başlığı": g_title[:45] + "..." if len(g_title) > 45 else g_title,
+                    "Toplam Etiket": label_count,
+                    "Oluşacak Sayfa": page_count,
+                    "Durum": "✅ Tam Sığdı" if label_count <= 6 else f"⚠️ {page_count} Sayfaya Bölündü"
                 })
             
             st.dataframe(summary_rows, use_container_width=True)
 
     else:
-        # Tasarruf modunda tüm ürünler tek havuza girer
         final_grouped_receipts = raw_groups
 
     st.markdown("---")
