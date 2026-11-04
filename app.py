@@ -12,11 +12,6 @@ from pdf2image import convert_from_path
 from pyzbar.pyzbar import decode
 from PIL import Image
 
-try:
-    import pytesseract
-except ImportError:
-    pytesseract = None
-
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, PageBreak, Paragraph, Spacer, Image as RLImage
 from reportlab.lib import colors
@@ -29,7 +24,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 # 1. ARAYÜZ VE TÜRKÇE FONT AYARLARI
 # ==========================================
 st.set_page_config(page_title="Trendyol Etiket Düzenleyici", page_icon="📦", layout="wide")
-st.title("📦 Trendyol Toplu Etiket")
+st.title("📦 Trendyol Toplu Etiket (Renk Analizli Logo Tespiti)")
 
 @st.cache_resource
 def load_turkish_fonts():
@@ -52,39 +47,76 @@ def fix_tr(text):
     return text.replace('\n', ' ').strip()
 
 # ==========================================
-# 2. KANUN KURAL TABANLI PARSER (RULE-BASED)
+# 2. RENK ANALİZİ İLE KARGO TESPİT MOTORU
+# ==========================================
+def detect_cargo_by_color_analysis(cropped_pil_img):
+    """
+    Kırpılan logonun piksellerindeki RGB renk dağılımını analiz eder.
+    """
+    if not cropped_pil_img:
+        return "Görselden Kontrol Edin"
+
+    img_rgb = cropped_pil_img.convert('RGB')
+    img_small = img_rgb.resize((60, 60))
+    pixels = list(img_small.getdata())
+
+    orange_count = 0  # Trendyol Express (Turuncu)
+    yellow_count = 0  # PTT Kargo (Sarı)
+    blue_count = 0    # PTT / Yurtiçi (Mavi)
+    red_count = 0     # Aras / MNG (Kırmızı)
+
+    for r, g, b in pixels:
+        # Arka plan beyaz ve siyahları ele
+        if (r > 220 and g > 220 and b > 220) or (r < 35 and g < 35 and b < 35):
+            continue
+
+        # Trendyol Turuncusu
+        if r > 190 and 70 <= g <= 150 and b < 90:
+            orange_count += 1
+        # PTT Sarısı
+        elif r > 180 and g > 140 and b < 100:
+            yellow_count += 1
+        # PTT / Yurtiçi Mavisi
+        elif r < 90 and 60 <= g <= 160 and b > 130:
+            blue_count += 1
+        # Aras / MNG Kırmızı
+        elif r > 180 and g < 70 and b < 70:
+            red_count += 1
+
+    # Dominant Renk Kararı
+    if orange_count > 12:
+        return "Trendyol Express"
+    elif yellow_count > 8 or (yellow_count > 3 and blue_count > 3):
+        return "PTT Kargo"
+    elif red_count > 12:
+        return "Aras / MNG Kargo"
+    elif blue_count > 15:
+        return "Yurtiçi / PTT Kargo"
+    
+    return "Görselden Kontrol Edin"
+
+# ==========================================
+# 3. KURAL TABANLI PARSER ENGINE
 # ==========================================
 def parse_trendyol_attribute_block(text_block, cargo_bc="N/A"):
-    """
-    Kural 1: Adet kanunu -> RAKAM + "ADET" (Arada boşluk var)
-    Kural 2: Beden -> Tek Ebat / Tek Beden / Standart / XL / Numara
-    Kural 3: Renk -> RENKLİ / BEYAZ / SİYAH / Renk adı
-    Kural 4: Birleşik Barkod + Stok Kodu Bölücü (TYB... + Slug)
-    """
-    # 1. ADET KANUNU (RAKAM + ADET)
     qty_match = re.search(r'\b(\d+)\s*(?:Adet|ADET|adet)\b', text_block)
     qty = f"{qty_match.group(1)} Adet" if qty_match else "1 Adet"
 
-    # 2. ÜRÜN SIRALAMASI (1, 2, 3...)
     seq_match = re.search(r'(?:^|\n|\s)(\d{1,2})\s+(?:1|Adet|Renk|Beden|\n)', text_block)
     seq = seq_match.group(1) if seq_match else "1"
 
-    # 3. BEDEN TESPİTİ VE FALLBACK
     size_pattern = r'\b(Tek\s*Ebat|Tek\s*Beden|Standart|One\s*Size|XS|S|M|L|XL|[2-4]XL|\d{2,3})\b'
     size_match = re.search(size_pattern, text_block, re.IGNORECASE)
     size = size_match.group(1).title() if size_match else "Tek Ebat"
 
-    # 4. RENK TESPİTİ VE FALLBACK
     color_pattern = r'\b(RENKLİ|RENKLI|BEYAZ|SİYAH|SIYAH|GRİ|GRI|KIRMIZI|MAVİ|MAVI|SARI|YEŞİL|YESIL|PEMBE|TURUNCU|LACİVERT|LACIVERT|KAHVERENGİ|GÜMÜŞ|ALTIN|Tek\s*Renk)\b'
     color_match = re.search(color_pattern, text_block, re.IGNORECASE)
     color = color_match.group(1).upper() if color_match else "-"
 
-    # 5. BARKOD VE STOK KODU AYRIŞTIRICI (BİRLEŞİK METİN ÇÖZÜCÜ)
     barcode = "-"
     sku = "-"
 
     combined_match = re.search(r'\b(TYB[A-Z0-9]{12,20})([a-zA-Z0-9_\-\u00c0-\u017f]+)?\b', text_block)
-    
     if combined_match:
         barcode = combined_match.group(1)
         sku = combined_match.group(2) if combined_match.group(2) else "-"
@@ -107,7 +139,7 @@ def parse_trendyol_attribute_block(text_block, cargo_bc="N/A"):
     }
 
 # ==========================================
-# 3. UZAMSAL (SPATIAL) HASSAS VERİ ÇEKME
+# 4. SPATIAL DATA EXTRACTION
 # ==========================================
 def extract_order_data_from_pdf(pdf_path):
     orders_on_page = []
@@ -121,11 +153,11 @@ def extract_order_data_from_pdf(pdf_path):
     for page_idx, page_layout in enumerate(extract_pages(pdf_path)):
         page_img = images[page_idx] if page_idx < len(images) else None
 
-        # 1. Kargo Logosunu Büyük ve Okunabilir Boyutta Kırpma
-        cargo_company = "PTT Kargo"
+        cargo_company = "Görselden Kontrol Edin"
         cargo_logo_bytes = None
         cropped_img_pil = None
         
+        # 1. Logonun Bulunduğu Bölgeyi Kırpma
         if page_img:
             w, h = page_img.size
             crop_box = (int(w * 0.65), int(h * 0.02), int(w * 0.99), int(h * 0.22))
@@ -135,7 +167,10 @@ def extract_order_data_from_pdf(pdf_path):
             cropped_img_pil.save(buf, format='PNG')
             cargo_logo_bytes = buf.getvalue()
 
-        # 2. Metin Bloklarını Koordinatlı Çekme
+            # Renk Analizi ile Kargo Tespiti
+            cargo_company = detect_cargo_by_color_analysis(cropped_img_pil)
+
+        # 2. Metin Bloklarını Çekme
         text_blocks = []
         for element in page_layout:
             if isinstance(element, LTTextContainer):
@@ -145,17 +180,6 @@ def extract_order_data_from_pdf(pdf_path):
                 })
                 
         full_page_text = "\n".join([b['text'] for b in text_blocks])
-        text_upper = full_page_text.upper()
-
-        # Kargo Firması Tespiti (PTT Öncelikli)
-        if "PTT" in text_upper: cargo_company = "PTT Kargo"
-        elif "YURTICI" in text_upper or "YURTİÇİ" in text_upper: cargo_company = "Yurtiçi Kargo"
-        elif "ARAS" in text_upper: cargo_company = "Aras Kargo"
-        elif "MNG" in text_upper: cargo_company = "MNG Kargo"
-        elif "SURAT" in text_upper or "SÜRAT" in text_upper: cargo_company = "Sürat Kargo"
-        elif "TRENDYOL EXPRESS" in text_upper or " TEX " in text_upper: cargo_company = "Trendyol Express"
-        elif "SENDEO" in text_upper: cargo_company = "Sendeo"
-        elif "HEPSIJET" in text_upper: cargo_company = "HepsiJET"
 
         raw_texts.append({
             "page": page_idx + 1, 
@@ -164,12 +188,10 @@ def extract_order_data_from_pdf(pdf_path):
             "detected_cargo": cargo_company
         })
 
-        # 3. Sipariş No
         order_no = "N/A"
         m_ord = re.search(r'Sipariş No\s*[:\|]?\s*(\d+)', full_page_text)
         if m_ord: order_no = m_ord.group(1).strip()
 
-        # 4. Alıcı Adı
         recipient = "N/A"
         for b in text_blocks:
             if "Ad-Soyad" in b['text']:
@@ -180,7 +202,6 @@ def extract_order_data_from_pdf(pdf_path):
                         if r_candidate.startswith(":"): r_candidate = r_candidate[1:].strip()
                         if r_candidate: recipient = fix_tr(r_candidate)
 
-        # 5. Adres
         address = "N/A"
         for b in text_blocks:
             if "Adres" in b['text'] or b['text'].startswith("Adres"):
@@ -198,10 +219,9 @@ def extract_order_data_from_pdf(pdf_path):
                                 addr_parts.append(t.replace('\n', ' '))
                 if addr_parts: address = fix_tr(" ".join(addr_parts))
 
-        # 6. Kargo Barkodu
         cargo_bc = "N/A"
         m_bc = re.search(r'Kargo Barkodu\s*\n?\s*(\d{13,16})', full_page_text)
-        if not m_bc: m_bc = re.search(r'\b(734\d{13})\b', full_page_text)
+        if not m_bc: m_bc = re.search(r'\b(73\d{14})\b', full_page_text)
         if m_bc: cargo_bc = m_bc.group(1).strip()
         
         if cargo_bc == "N/A" and page_img:
@@ -210,7 +230,6 @@ def extract_order_data_from_pdf(pdf_path):
                 if decoded: cargo_bc = decoded[0].data.decode('utf-8')
             except: pass
 
-        # 7. KURAL TABANLI ÜRÜN VE ADET PARÇALAMA
         products = []
         for b in text_blocks:
             t = b['text']
@@ -221,7 +240,6 @@ def extract_order_data_from_pdf(pdf_path):
                     name_part = " ".join(lines[:adet_idx]).strip()
                     
                     attr_block_text = "\n".join(lines[adet_idx:])
-                    
                     p_y_bottom = b['bbox'][1] - 40
                     p_y_top = b['bbox'][3] + 40
                     for b2 in text_blocks:
@@ -270,9 +288,9 @@ def extract_order_data_from_pdf(pdf_path):
     return orders_on_page, raw_texts
 
 # ==========================================
-# 4. PDF BASTIRMA
+# 5. PDF BASTIRMA
 # ==========================================
-def build_grouped_a4_pdf(grouped_receipts, output_pdf_path, tasarruf_modu):
+def build_grouped_a4_pdf(grouped_receipts, output_pdf_path, sadece_gorsel_kargo):
     doc = SimpleDocTemplate(output_pdf_path, pagesize=A4, leftMargin=12, rightMargin=12, topMargin=8, bottomMargin=8)
     styles = getSampleStyleSheet()
     
@@ -292,8 +310,14 @@ def build_grouped_a4_pdf(grouped_receipts, output_pdf_path, tasarruf_modu):
             
             cell_elements.append(Paragraph(f"<b>ALICI:</b> {item['recipient']}", recipient_style))
             cell_elements.append(Paragraph(f"<b>ADRES:</b> {item['address']}", address_style))
-            cell_elements.append(Paragraph(f"Sipariş No: {item['order_no']} | <b>Resime bak</b>", order_style))
             
+            # Seçeneğe Göre Kargo Yazısını Göster veya Gizle
+            if sadece_gorsel_kargo:
+                cell_elements.append(Paragraph(f"Sipariş No: {item['order_no']}", order_style))
+            else:
+                cell_elements.append(Paragraph(f"Sipariş No: {item['order_no']} | <b>Kargo: {item['cargo_company']}</b>", order_style))
+            
+            # Kırpılan Kargo Logosunu Büyük ve Net Şekilde Ekleme
             if item.get("cargo_logo_bytes"):
                 try:
                     logo_io = BytesIO(item["cargo_logo_bytes"])
@@ -358,20 +382,20 @@ def build_grouped_a4_pdf(grouped_receipts, output_pdf_path, tasarruf_modu):
     doc.build(story)
 
 # ==========================================
-# 5. KULLANICI ARAYÜZÜ (ÖNİZLEME VE DEBUG)
+# 6. KULLANICI ARAYÜZÜ
 # ==========================================
 if 'processed_data' not in st.session_state: st.session_state.processed_data = None
 if 'raw_debug_texts' not in st.session_state: st.session_state.raw_debug_texts = None
 if 'debug_mode' not in st.session_state: st.session_state.debug_mode = False
 
 st.sidebar.header("⚙️ Ayarlar")
-sayfa_tasarruf = st.sidebar.checkbox("Sayfa Tasarruf Modu", value=True)
+sadece_gorsel_kargo = st.sidebar.checkbox("Kargo Adını Yazma (Sadece Görseli Göster)", value=True, help="Hatalı metin çıktısını önlemek için kargo firması adını metin olarak yazmaz, sadece kırpılan büyük logo resmini basar.")
 
 uploaded_files = st.file_uploader("PDF Yükleyin", type=["pdf"], accept_multiple_files=True)
 
 if uploaded_files:
     if st.button("Verileri Oku ve Tabloyu Oluştur"):
-        with st.spinner("PDF'ler kural tabanlı engine ile analiz ediliyor..."):
+        with st.spinner("PDF'ler renk analizli engine ile işleniyor..."):
             all_orders, all_raw_texts = [], []
             with tempfile.TemporaryDirectory() as temp_dir:
                 for uf in uploaded_files:
@@ -387,14 +411,14 @@ if uploaded_files:
 
 if st.session_state.processed_data:
     st.markdown("---")
-    st.subheader("👀 Tüm Siparişlerin Önizlemesi ")
+    st.subheader("👀 Tüm Siparişlerin Önizlemesi")
     
     preview_data = []
     for ord_item in st.session_state.processed_data:
         for p in ord_item['products']:
             preview_data.append({
                 "Alıcı": ord_item["recipient"],
-                "Kargo Şirketi": ord_item["cargo_company"],
+                "Kargo Tespiti (Renk)": ord_item["cargo_company"],
                 "Ürün Adı": p["name"],
                 "Adet (GERÇEK)": p["qty"],
                 "Renk": p["color"],
@@ -417,7 +441,7 @@ if st.session_state.processed_data:
                 for ord_item in st.session_state.processed_data:
                     grouped[ord_item["group_key"]].append(ord_item)
                 
-                build_grouped_a4_pdf(grouped, output_pdf_path, sayfa_tasarruf)
+                build_grouped_a4_pdf(grouped, output_pdf_path, sadece_gorsel_kargo)
                 
                 with open(output_pdf_path, "rb") as f: pdf_bytes = f.read()
                 st.download_button(label="📥 Etiket PDF'ini İndir", data=pdf_bytes, file_name="Hazir_Etiketler.pdf", mime="application/pdf")
@@ -435,7 +459,7 @@ if st.session_state.processed_data:
         page_idx = page_options.index(selected_page)
         page_info = st.session_state.raw_debug_texts[page_idx]
         
-        st.write(f"**Tespit Edilen Kargo:** `{page_info['detected_cargo']}`")
+        st.write(f"**Renk Analizi ile Tahmin Edilen Kargo:** `{page_info['detected_cargo']}`")
         if page_info['cropped_img']:
             st.write("**Sayfadan Kırpılan Kargo Logosu Bölgesi:**")
             st.image(page_info['cropped_img'], width=300)
