@@ -83,19 +83,16 @@ def parse_trendyol_attribute_block(text_block, cargo_bc="N/A"):
     barcode = "-"
     sku = "-"
 
-    # Örnek: TYBU9BYXRORFEI5D61traktör-yıldız-seti veya TYBE4G3H8O6U2M4L14puma
     combined_match = re.search(r'\b(TYB[A-Z0-9]{12,20})([a-zA-Z0-9_\-\u00c0-\u017f]+)?\b', text_block)
     
     if combined_match:
         barcode = combined_match.group(1)
         sku = combined_match.group(2) if combined_match.group(2) else "-"
     else:
-        # Sadece rakamlardan oluşan bağımsız barkodlar (Örn: 65734623)
         bc_match = re.search(r'\b(\d{6,14})\b', text_block)
         if bc_match and bc_match.group(1) not in qty and bc_match.group(1) != cargo_bc:
             barcode = bc_match.group(1)
 
-        # Bağımsız Stok Kodu
         sku_match = re.search(r'Stok Kodu\s*[:\n\|]?\s*([a-zA-Z0-9_\-\u00c0-\u017f]+)', text_block, re.IGNORECASE)
         if sku_match and sku_match.group(1).lower() not in ['ptt', 'barkod', 'beden', 'renk']:
             sku = sku_match.group(1)
@@ -126,7 +123,7 @@ def extract_order_data_from_pdf(pdf_path):
 
         # 1. Kargo Logosunu Büyük ve Okunabilir Boyutta Kırpma
         cargo_company = "PTT Kargo"
-        cropped_logo_bytes = None
+        cargo_logo_bytes = None
         cropped_img_pil = None
         
         if page_img:
@@ -136,7 +133,7 @@ def extract_order_data_from_pdf(pdf_path):
             
             buf = BytesIO()
             cropped_img_pil.save(buf, format='PNG')
-            cropped_logo_bytes = buf.getvalue()
+            cargo_logo_bytes = buf.getvalue()
 
         # 2. Metin Bloklarını Koordinatlı Çekme
         text_blocks = []
@@ -223,10 +220,8 @@ def extract_order_data_from_pdf(pdf_path):
                     adet_idx = lines.index("Adet")
                     name_part = " ".join(lines[:adet_idx]).strip()
                     
-                    # Nitelik Bloğunu Kural Engine'e Gönderme
                     attr_block_text = "\n".join(lines[adet_idx:])
                     
-                    # Yanındaki koordinat kutularını da ekle
                     p_y_bottom = b['bbox'][1] - 40
                     p_y_top = b['bbox'][3] + 40
                     for b2 in text_blocks:
@@ -275,7 +270,7 @@ def extract_order_data_from_pdf(pdf_path):
     return orders_on_page, raw_texts
 
 # ==========================================
-# 4. PDF BASTIRMA (BÜYÜK LOGO VE İNSAN OPERATÖR UYUMLU)
+# 4. PDF BASTIRMA
 # ==========================================
 def build_grouped_a4_pdf(grouped_receipts, output_pdf_path, tasarruf_modu):
     doc = SimpleDocTemplate(output_pdf_path, pagesize=A4, leftMargin=12, rightMargin=12, topMargin=8, bottomMargin=8)
@@ -299,7 +294,6 @@ def build_grouped_a4_pdf(grouped_receipts, output_pdf_path, tasarruf_modu):
             cell_elements.append(Paragraph(f"<b>ADRES:</b> {item['address']}", address_style))
             cell_elements.append(Paragraph(f"Sipariş No: {item['order_no']} | <b>Kargo: {item['cargo_company']}</b>", order_style))
             
-            # Kargo Logosunu Büyük ve Net Şekilde Ekleme (width=140, height=38)
             if item.get("cargo_logo_bytes"):
                 try:
                     logo_io = BytesIO(item["cargo_logo_bytes"])
