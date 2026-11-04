@@ -292,7 +292,7 @@ def build_grouped_a4_pdf(grouped_receipts, output_pdf_path, tasarruf_modu):
             
             cell_elements.append(Paragraph(f"<b>ALICI:</b> {item['recipient']}", recipient_style))
             cell_elements.append(Paragraph(f"<b>ADRES:</b> {item['address']}", address_style))
-            cell_elements.append(Paragraph(f"Sipariş No: {item['order_no']} | <b>Kargo: {item['cargo_company']}</b>", order_style))
+            cell_elements.append(Paragraph(f"Sipariş No: {item['order_no']} | <b>Resime bak</b>", order_style))
             
             if item.get("cargo_logo_bytes"):
                 try:
