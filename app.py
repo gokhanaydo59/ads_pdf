@@ -17,6 +17,7 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, PageBreak, 
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.graphics.barcode import code128
+from reportlab.graphics import renderPDF
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
@@ -65,7 +66,7 @@ def tint_image_bytes(img_bytes, murekkep_modu):
         return img_bytes
 
 class ColoredCode128(Flowable):
-    """ReportLab Code128 barkodunu kesin olarak seçilen mürekkep renginde çizer."""
+    """ReportLab Code128 vektörel çizimini bozmadan tüm barları seçilen renge boyar."""
     def __init__(self, value, barHeight=32, barWidth=1.0, color=colors.black):
         super().__init__()
         self.bc = code128.Code128(value, barHeight=barHeight, barWidth=barWidth)
@@ -74,21 +75,17 @@ class ColoredCode128(Flowable):
         self.height = self.bc.height
 
     def draw(self):
-        self.canv.saveState()
-        self.canv.setFillColor(self.color)
-        self.canv.setStrokeColor(self.color)
-        self.bc.barColor = self.color
-        for bar in getattr(self.bc, 'decompose', lambda: [])():
-            pass
-        # Barkodun tüm çubuklarını doğrudan kanvas üzerinde hedef renkle çiz
-        self.bc._calculate()
-        x = self.bc.quiet and self.bc.lquiet or 0
-        for b in self.bc.encoded:
-            if b > 0:
-                w = b * self.bc.barWidth
-                self.canv.rect(x, 0, w, self.bc.barHeight, fill=1, stroke=0)
-            x += abs(b) * self.bc.barWidth
-        self.canv.restoreState()
+        drawing = self.bc.decompose()
+        def recolor(node):
+            if hasattr(node, 'fillColor') and node.fillColor is not None:
+                node.fillColor = self.color
+            if hasattr(node, 'strokeColor') and node.strokeColor is not None:
+                node.strokeColor = self.color
+            if hasattr(node, 'contents'):
+                for child in node.contents:
+                    recolor(child)
+        recolor(drawing)
+        renderPDF.draw(drawing, self.canv, 0, 0)
 
 # ==========================================
 # 2. RENK ANALİZİ İLE KARGO TESPİT MOTORU
