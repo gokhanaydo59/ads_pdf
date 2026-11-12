@@ -357,7 +357,8 @@ def build_grouped_a4_pdf(grouped_receipts, output_pdf_path, duzen_modu, sadece_g
                 cell_elements.append(Spacer(1, 2))
                 if item['cargo_barcode'] != "N/A":
                     try:
-                        bc = code128.Code128(item['cargo_barcode'], barHeight=32, barWidth=1.0, barColor=ink_primary)
+                        bc = code128.Code128(item['cargo_barcode'], barHeight=32, barWidth=1.0)
+                        bc.barColor = ink_primary
                         cell_elements.append(bc)
                         cell_elements.append(Paragraph(f"{item['cargo_barcode']}", bc_text_style))
                     except: cell_elements.append(Paragraph(f"Kargo Kodu: {item['cargo_barcode']}", bc_text_style))
@@ -432,7 +433,8 @@ def build_grouped_a4_pdf(grouped_receipts, output_pdf_path, duzen_modu, sadece_g
                 cell_elements.append(Spacer(1, 2))
                 if item['cargo_barcode'] != "N/A":
                     try:
-                        bc = code128.Code128(item['cargo_barcode'], barHeight=32, barWidth=1.0, barColor=ink_primary)
+                        bc = code128.Code128(item['cargo_barcode'], barHeight=32, barWidth=1.0)
+                        bc.barColor = ink_primary
                         cell_elements.append(bc)
                         cell_elements.append(Paragraph(f"{item['cargo_barcode']}", bc_text_style))
                     except: cell_elements.append(Paragraph(f"Kargo Kodu: {item['cargo_barcode']}", bc_text_style))
