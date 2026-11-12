@@ -1,5 +1,6 @@
 import os
 import re
+import gc
 import tempfile
 import urllib.request
 from io import BytesIO
@@ -108,7 +109,7 @@ def detect_cargo_by_color_analysis(cropped_pil_img):
 
     img_rgb = cropped_pil_img.convert('RGB')
     img_small = img_rgb.resize((60, 60))
-    pixels = list(img_small.getdata())
+    pixels = list(img_small.get_flattened_data()) if hasattr(img_small, "get_flattened_data") else list(img_small.getdata())
 
     orange_count, yellow_count, blue_count, red_count = 0, 0, 0, 0
 
@@ -186,7 +187,7 @@ def extract_order_data_from_pdf(pdf_path):
     raw_texts = [] 
     
     try:
-        images = convert_from_path(pdf_path)
+        images = convert_from_path(pdf_path, dpi=110)
     except Exception:
         images = []
 
@@ -322,6 +323,13 @@ def extract_order_data_from_pdf(pdf_path):
             "group_key": products[0]["name"] if products else "Diger_Urunler"
         })
 
+        if page_img:
+            page_img.close()
+            if page_idx < len(images):
+                images[page_idx] = None
+
+    del images
+    gc.collect()
     return orders_on_page, raw_texts
 
 # ==========================================
@@ -516,6 +524,7 @@ def build_grouped_a4_pdf(grouped_receipts, output_pdf_path, duzen_modu, sadece_g
                 sub_page_idx += 1
 
     doc.build(story)
+    gc.collect()
 
 # ==========================================
 # 6. KULLANICI ARAYÜZÜ (STREAMLIT)
@@ -646,7 +655,7 @@ if st.session_state.processed_data:
                     "Durum": "✅ Tam Sığdı" if label_count <= 6 else f"⚠️ {page_count} Sayfaya Bölündü"
                 })
             
-            st.dataframe(summary_rows, use_container_width=True)
+            st.dataframe(summary_rows, width='stretch')
 
     else:
         final_grouped_receipts = raw_groups
@@ -669,7 +678,7 @@ if st.session_state.processed_data:
                 "Sipariş No": ord_item["order_no"]
             })
     
-    st.dataframe(preview_data, use_container_width=True)
+    st.dataframe(preview_data, width='stretch')
 
     st.markdown("---")
     c1, c2 = st.columns(2)
