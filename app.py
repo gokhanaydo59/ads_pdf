@@ -13,7 +13,7 @@ from pyzbar.pyzbar import decode
 from PIL import Image, ImageOps
 
 from reportlab.lib.pagesizes import A4
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, PageBreak, Paragraph, Spacer, Image as RLImage
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, PageBreak, Paragraph, Spacer, Image as RLImage, Flowable
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.graphics.barcode import code128
@@ -63,6 +63,32 @@ def tint_image_bytes(img_bytes, murekkep_modu):
         return buf.getvalue()
     except Exception:
         return img_bytes
+
+class ColoredCode128(Flowable):
+    """ReportLab Code128 barkodunu kesin olarak seçilen mürekkep renginde çizer."""
+    def __init__(self, value, barHeight=32, barWidth=1.0, color=colors.black):
+        super().__init__()
+        self.bc = code128.Code128(value, barHeight=barHeight, barWidth=barWidth)
+        self.color = color
+        self.width = self.bc.width
+        self.height = self.bc.height
+
+    def draw(self):
+        self.canv.saveState()
+        self.canv.setFillColor(self.color)
+        self.canv.setStrokeColor(self.color)
+        self.bc.barColor = self.color
+        for bar in getattr(self.bc, 'decompose', lambda: [])():
+            pass
+        # Barkodun tüm çubuklarını doğrudan kanvas üzerinde hedef renkle çiz
+        self.bc._calculate()
+        x = self.bc.quiet and self.bc.lquiet or 0
+        for b in self.bc.encoded:
+            if b > 0:
+                w = b * self.bc.barWidth
+                self.canv.rect(x, 0, w, self.bc.barHeight, fill=1, stroke=0)
+            x += abs(b) * self.bc.barWidth
+        self.canv.restoreState()
 
 # ==========================================
 # 2. RENK ANALİZİ İLE KARGO TESPİT MOTORU
@@ -357,8 +383,7 @@ def build_grouped_a4_pdf(grouped_receipts, output_pdf_path, duzen_modu, sadece_g
                 cell_elements.append(Spacer(1, 2))
                 if item['cargo_barcode'] != "N/A":
                     try:
-                        bc = code128.Code128(item['cargo_barcode'], barHeight=32, barWidth=1.0)
-                        bc.barColor = ink_primary
+                        bc = ColoredCode128(item['cargo_barcode'], barHeight=32, barWidth=1.0, color=ink_primary)
                         cell_elements.append(bc)
                         cell_elements.append(Paragraph(f"{item['cargo_barcode']}", bc_text_style))
                     except: cell_elements.append(Paragraph(f"Kargo Kodu: {item['cargo_barcode']}", bc_text_style))
@@ -433,8 +458,7 @@ def build_grouped_a4_pdf(grouped_receipts, output_pdf_path, duzen_modu, sadece_g
                 cell_elements.append(Spacer(1, 2))
                 if item['cargo_barcode'] != "N/A":
                     try:
-                        bc = code128.Code128(item['cargo_barcode'], barHeight=32, barWidth=1.0)
-                        bc.barColor = ink_primary
+                        bc = ColoredCode128(item['cargo_barcode'], barHeight=32, barWidth=1.0, color=ink_primary)
                         cell_elements.append(bc)
                         cell_elements.append(Paragraph(f"{item['cargo_barcode']}", bc_text_style))
                     except: cell_elements.append(Paragraph(f"Kargo Kodu: {item['cargo_barcode']}", bc_text_style))
