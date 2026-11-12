@@ -17,8 +17,6 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, PageBreak, 
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.graphics.barcode import code128
-from reportlab.graphics.shapes import Drawing
-from reportlab.graphics import renderPDF
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
@@ -67,7 +65,7 @@ def tint_image_bytes(img_bytes, murekkep_modu):
         return img_bytes
 
 class ColoredCode128(Flowable):
-    """ReportLab Code128 vektörel çizimini bozmadan tüm barları seçilen renge boyar."""
+    """Standart Code128 çizimi sırasında tuvalin siyah renk komutlarını hedef mürekkep rengine yönlendirir."""
     def __init__(self, value, barHeight=32, barWidth=1.0, color=colors.black):
         super().__init__()
         self.bc = code128.Code128(value, barHeight=barHeight, barWidth=barWidth)
@@ -76,25 +74,30 @@ class ColoredCode128(Flowable):
         self.height = self.bc.height
 
     def draw(self):
-        d = Drawing(self.width, self.height)
-        items = self.bc.decompose()
-        if not isinstance(items, (list, tuple)):
-            items = [items]
+        canv = self.canv
+        orig_set_fill = canv.setFillColor
+        orig_set_stroke = canv.setStrokeColor
+        orig_set_fill_rgb = canv.setFillColorRGB
+        orig_set_stroke_rgb = canv.setStrokeColorRGB
+        orig_set_gray = canv.setFillGray
 
-        def recolor_and_add(node):
-            if hasattr(node, 'fillColor') and node.fillColor is not None:
-                node.fillColor = self.color
-            if hasattr(node, 'strokeColor') and node.strokeColor is not None:
-                node.strokeColor = self.color
-            if hasattr(node, 'contents'):
-                for child in node.contents:
-                    recolor_and_add(child)
+        target = self.color
+        canv.setFillColor = lambda c, alpha=None: orig_set_fill(target)
+        canv.setStrokeColor = lambda c, alpha=None: orig_set_stroke(target)
+        canv.setFillColorRGB = lambda r, g, b, alpha=None: orig_set_fill(target)
+        canv.setStrokeColorRGB = lambda r, g, b, alpha=None: orig_set_stroke(target)
+        canv.setFillGray = lambda g, alpha=None: orig_set_fill(target)
 
-        for item in items:
-            recolor_and_add(item)
-            d.add(item)
-
-        renderPDF.draw(d, self.canv, 0, 0)
+        try:
+            orig_set_fill(target)
+            orig_set_stroke(target)
+            self.bc.drawOn(canv, 0, 0)
+        finally:
+            canv.setFillColor = orig_set_fill
+            canv.setStrokeColor = orig_set_stroke
+            canv.setFillColorRGB = orig_set_fill_rgb
+            canv.setStrokeColorRGB = orig_set_stroke_rgb
+            canv.setFillGray = orig_set_gray
 
 # ==========================================
 # 2. RENK ANALİZİ İLE KARGO TESPİT MOTORU
