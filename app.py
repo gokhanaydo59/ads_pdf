@@ -10,7 +10,7 @@ from pdfminer.high_level import extract_pages
 from pdfminer.layout import LTTextContainer
 from pdf2image import convert_from_path
 from pyzbar.pyzbar import decode
-from PIL import Image
+from PIL import Image, ImageOps
 
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, PageBreak, Paragraph, Spacer, Image as RLImage
@@ -45,6 +45,24 @@ MAIN_FONT, BOLD_FONT = load_turkish_fonts()
 def fix_tr(text):
     if not isinstance(text, str): return str(text)
     return text.replace('\n', ' ').strip()
+
+def tint_image_bytes(img_bytes, murekkep_modu):
+    """Kargo logosu görselini seçilen mürekkep moduna (Magenta / Cyan) dönüştürür."""
+    if not img_bytes or murekkep_modu == "Standart (Siyah / Renkli)":
+        return img_bytes
+    try:
+        pil_img = Image.open(BytesIO(img_bytes)).convert("L")
+        if murekkep_modu == "Full Magenta Baskı (Siyah Yok)":
+            tinted = ImageOps.colorize(pil_img, black="#EC008C", white="#FFFFFF")
+        elif murekkep_modu == "Full Cyan Baskı (Siyah Yok)":
+            tinted = ImageOps.colorize(pil_img, black="#00AEEF", white="#FFFFFF")
+        else:
+            return img_bytes
+        buf = BytesIO()
+        tinted.save(buf, format="PNG")
+        return buf.getvalue()
+    except Exception:
+        return img_bytes
 
 # ==========================================
 # 2. RENK ANALİZİ İLE KARGO TESPİT MOTORU
@@ -274,17 +292,37 @@ def extract_order_data_from_pdf(pdf_path):
 # ==========================================
 # 5. DÜZENLİ PDF BASTIRMA (6 KURALI GARANTİLİ)
 # ==========================================
-def build_grouped_a4_pdf(grouped_receipts, output_pdf_path, duzen_modu, sadece_gorsel_kargo):
+def build_grouped_a4_pdf(grouped_receipts, output_pdf_path, duzen_modu, sadece_gorsel_kargo, murekkep_modu):
     doc = SimpleDocTemplate(output_pdf_path, pagesize=A4, leftMargin=12, rightMargin=12, topMargin=8, bottomMargin=8)
     styles = getSampleStyleSheet()
+
+    # Mürekkep Modu Renk Paleti (Siyahı sıfırlamak için saf CMYK)
+    if murekkep_modu == "Full Magenta Baskı (Siyah Yok)":
+        ink_primary = colors.CMYKColor(0, 1, 0, 0)
+        ink_secondary = colors.CMYKColor(0, 0.8, 0, 0)
+        ink_grid = colors.CMYKColor(0, 0.45, 0, 0)
+        ink_hex_accent = "#EC008C"
+        ink_hex_qty = "#B8006B"
+    elif murekkep_modu == "Full Cyan Baskı (Siyah Yok)":
+        ink_primary = colors.CMYKColor(1, 0, 0, 0)
+        ink_secondary = colors.CMYKColor(0.8, 0, 0, 0)
+        ink_grid = colors.CMYKColor(0.45, 0, 0, 0)
+        ink_hex_accent = "#00AEEF"
+        ink_hex_qty = "#0077B5"
+    else:
+        ink_primary = colors.HexColor("#2C3E50")
+        ink_secondary = colors.HexColor("#566573")
+        ink_grid = colors.HexColor("#BDC3C7")
+        ink_hex_accent = "#2980B9"
+        ink_hex_qty = "#C0392B"
     
-    recipient_style = ParagraphStyle('Recip', parent=styles['Normal'], fontSize=8.5, leading=10.5, fontName=BOLD_FONT, textColor=colors.HexColor("#2C3E50"))
-    address_style = ParagraphStyle('Addr', parent=styles['Normal'], fontSize=6.5, leading=8.5, fontName=MAIN_FONT, textColor=colors.HexColor("#566573"))
-    order_style = ParagraphStyle('Ord', parent=styles['Normal'], fontSize=7.0, leading=9.0, fontName=MAIN_FONT, textColor=colors.HexColor("#7F8C8D"))
-    multi_style = ParagraphStyle('Multi', parent=styles['Normal'], fontSize=8.0, leading=10, fontName=BOLD_FONT, textColor=colors.HexColor("#FFFFFF"), backColor=colors.HexColor("#C0392B"), alignment=1)
-    text_style = ParagraphStyle('Txt', parent=styles['Normal'], fontSize=6.8, leading=9.0, fontName=MAIN_FONT, textColor=colors.HexColor("#34495E"))
-    bc_text_style = ParagraphStyle('BC', parent=styles['Normal'], fontSize=8.5, leading=11, fontName=BOLD_FONT, alignment=1, textColor=colors.HexColor("#2C3E50"))
-    page_header_style = ParagraphStyle('PageHeaderTitle', parent=styles['Normal'], fontSize=8.5, leading=11, fontName=BOLD_FONT, textColor=colors.HexColor("#1B4F72"), alignment=0)
+    recipient_style = ParagraphStyle('Recip', parent=styles['Normal'], fontSize=8.5, leading=10.5, fontName=BOLD_FONT, textColor=ink_primary)
+    address_style = ParagraphStyle('Addr', parent=styles['Normal'], fontSize=6.5, leading=8.5, fontName=MAIN_FONT, textColor=ink_secondary)
+    order_style = ParagraphStyle('Ord', parent=styles['Normal'], fontSize=7.0, leading=9.0, fontName=MAIN_FONT, textColor=ink_secondary)
+    multi_style = ParagraphStyle('Multi', parent=styles['Normal'], fontSize=8.0, leading=10, fontName=BOLD_FONT, textColor=colors.white, backColor=ink_primary, alignment=1)
+    text_style = ParagraphStyle('Txt', parent=styles['Normal'], fontSize=6.8, leading=9.0, fontName=MAIN_FONT, textColor=ink_primary)
+    bc_text_style = ParagraphStyle('BC', parent=styles['Normal'], fontSize=8.5, leading=11, fontName=BOLD_FONT, alignment=1, textColor=ink_primary)
+    page_header_style = ParagraphStyle('PageHeaderTitle', parent=styles['Normal'], fontSize=8.5, leading=11, fontName=BOLD_FONT, textColor=ink_primary, alignment=0)
     
     story = []
 
@@ -304,8 +342,9 @@ def build_grouped_a4_pdf(grouped_receipts, output_pdf_path, duzen_modu, sadece_g
                 
                 if item.get("cargo_logo_bytes"):
                     try:
-                        logo_io = BytesIO(item["cargo_logo_bytes"])
-                        pil_img = Image.open(BytesIO(item["cargo_logo_bytes"]))
+                        tinted_bytes = tint_image_bytes(item["cargo_logo_bytes"], murekkep_modu)
+                        logo_io = BytesIO(tinted_bytes)
+                        pil_img = Image.open(BytesIO(tinted_bytes))
                         orig_w, orig_h = pil_img.size
                         aspect = orig_w / orig_h if orig_h > 0 else 3.5
                         target_h = 36
@@ -318,7 +357,7 @@ def build_grouped_a4_pdf(grouped_receipts, output_pdf_path, duzen_modu, sadece_g
                 cell_elements.append(Spacer(1, 2))
                 if item['cargo_barcode'] != "N/A":
                     try:
-                        bc = code128.Code128(item['cargo_barcode'], barHeight=32, barWidth=1.0)
+                        bc = code128.Code128(item['cargo_barcode'], barHeight=32, barWidth=1.0, barColor=ink_primary)
                         cell_elements.append(bc)
                         cell_elements.append(Paragraph(f"{item['cargo_barcode']}", bc_text_style))
                     except: cell_elements.append(Paragraph(f"Kargo Kodu: {item['cargo_barcode']}", bc_text_style))
@@ -333,8 +372,8 @@ def build_grouped_a4_pdf(grouped_receipts, output_pdf_path, duzen_modu, sadece_g
                 products_html = ""
                 for p in item["products"]:
                     name = p['name'][:77] + "..." if len(p['name']) > 80 else p['name']
-                    products_html += f"<font color='#2980B9'><b>• Ürün #{p['index']}:</b></font> {name}<br/>"
-                    products_html += f"&nbsp;&nbsp;<b>Adet:</b> <font color='#C0392B'><b>{p['qty']}</b></font> | <b>Renk:</b> {p['color']} | <b>Beden:</b> {p['size']}<br/>"
+                    products_html += f"<font color='{ink_hex_accent}'><b>• Ürün #{p['index']}:</b></font> {name}<br/>"
+                    products_html += f"&nbsp;&nbsp;<b>Adet:</b> <font color='{ink_hex_qty}'><b>{p['qty']}</b></font> | <b>Renk:</b> {p['color']} | <b>Beden:</b> {p['size']}<br/>"
                     products_html += f"&nbsp;&nbsp;<b>Barkod:</b> {p['barcode']} | <b>Stok Kodu:</b> {p['sku']}<br/><br/>"
 
                 cell_elements.append(Paragraph(products_html.strip(), text_style))
@@ -347,9 +386,9 @@ def build_grouped_a4_pdf(grouped_receipts, output_pdf_path, duzen_modu, sadece_g
             grid_matrix = [[page_chunk[0], page_chunk[1]], [page_chunk[2], page_chunk[3]], [page_chunk[4], page_chunk[5]]]
             table = Table(grid_matrix, colWidths=[285, 285], rowHeights=[262, 262, 262])
             table.setStyle(TableStyle([
-                ('BOX', (0,0), (-1,-1), 1.5, colors.HexColor("#34495E")),
-                ('INNERGRID', (0,0), (-1,-1), 0.6, colors.HexColor("#BDC3C7")),
-                ('BACKGROUND', (0,0), (-1,-1), colors.HexColor("#FFFFFF")),
+                ('BOX', (0,0), (-1,-1), 1.5, ink_primary),
+                ('INNERGRID', (0,0), (-1,-1), 0.6, ink_grid),
+                ('BACKGROUND', (0,0), (-1,-1), colors.white),
                 ('VALIGN', (0,0), (-1,-1), 'TOP'),
                 ('TOPPADDING', (0,0), (-1,-1), 4), ('BOTTOMPADDING', (0,0), (-1,-1), 4),
                 ('LEFTPADDING', (0,0), (-1,-1), 6), ('RIGHTPADDING', (0,0), (-1,-1), 6),
@@ -378,8 +417,9 @@ def build_grouped_a4_pdf(grouped_receipts, output_pdf_path, duzen_modu, sadece_g
                 
                 if item.get("cargo_logo_bytes"):
                     try:
-                        logo_io = BytesIO(item["cargo_logo_bytes"])
-                        pil_img = Image.open(BytesIO(item["cargo_logo_bytes"]))
+                        tinted_bytes = tint_image_bytes(item["cargo_logo_bytes"], murekkep_modu)
+                        logo_io = BytesIO(tinted_bytes)
+                        pil_img = Image.open(BytesIO(tinted_bytes))
                         orig_w, orig_h = pil_img.size
                         aspect = orig_w / orig_h if orig_h > 0 else 3.5
                         target_h = 36
@@ -392,7 +432,7 @@ def build_grouped_a4_pdf(grouped_receipts, output_pdf_path, duzen_modu, sadece_g
                 cell_elements.append(Spacer(1, 2))
                 if item['cargo_barcode'] != "N/A":
                     try:
-                        bc = code128.Code128(item['cargo_barcode'], barHeight=32, barWidth=1.0)
+                        bc = code128.Code128(item['cargo_barcode'], barHeight=32, barWidth=1.0, barColor=ink_primary)
                         cell_elements.append(bc)
                         cell_elements.append(Paragraph(f"{item['cargo_barcode']}", bc_text_style))
                     except: cell_elements.append(Paragraph(f"Kargo Kodu: {item['cargo_barcode']}", bc_text_style))
@@ -407,8 +447,8 @@ def build_grouped_a4_pdf(grouped_receipts, output_pdf_path, duzen_modu, sadece_g
                 products_html = ""
                 for p in item["products"]:
                     name = p['name'][:77] + "..." if len(p['name']) > 80 else p['name']
-                    products_html += f"<font color='#2980B9'><b>• Ürün #{p['index']}:</b></font> {name}<br/>"
-                    products_html += f"&nbsp;&nbsp;<b>Adet:</b> <font color='#C0392B'><b>{p['qty']}</b></font> | <b>Renk:</b> {p['color']} | <b>Beden:</b> {p['size']}<br/>"
+                    products_html += f"<font color='{ink_hex_accent}'><b>• Ürün #{p['index']}:</b></font> {name}<br/>"
+                    products_html += f"&nbsp;&nbsp;<b>Adet:</b> <font color='{ink_hex_qty}'><b>{p['qty']}</b></font> | <b>Renk:</b> {p['color']} | <b>Beden:</b> {p['size']}<br/>"
                     products_html += f"&nbsp;&nbsp;<b>Barkod:</b> {p['barcode']} | <b>Stok Kodu:</b> {p['sku']}<br/><br/>"
 
                 cell_elements.append(Paragraph(products_html.strip(), text_style))
@@ -428,9 +468,9 @@ def build_grouped_a4_pdf(grouped_receipts, output_pdf_path, duzen_modu, sadece_g
                 grid_matrix = [[page_chunk[0], page_chunk[1]], [page_chunk[2], page_chunk[3]], [page_chunk[4], page_chunk[5]]]
                 table = Table(grid_matrix, colWidths=[285, 285], rowHeights=[252, 252, 252])
                 table.setStyle(TableStyle([
-                    ('BOX', (0,0), (-1,-1), 1.5, colors.HexColor("#34495E")),
-                    ('INNERGRID', (0,0), (-1,-1), 0.6, colors.HexColor("#BDC3C7")),
-                    ('BACKGROUND', (0,0), (-1,-1), colors.HexColor("#FFFFFF")),
+                    ('BOX', (0,0), (-1,-1), 1.5, ink_primary),
+                    ('INNERGRID', (0,0), (-1,-1), 0.6, ink_grid),
+                    ('BACKGROUND', (0,0), (-1,-1), colors.white),
                     ('VALIGN', (0,0), (-1,-1), 'TOP'),
                     ('TOPPADDING', (0,0), (-1,-1), 4), ('BOTTOMPADDING', (0,0), (-1,-1), 4),
                     ('LEFTPADDING', (0,0), (-1,-1), 6), ('RIGHTPADDING', (0,0), (-1,-1), 6),
@@ -450,6 +490,17 @@ if 'raw_debug_texts' not in st.session_state: st.session_state.raw_debug_texts =
 if 'debug_mode' not in st.session_state: st.session_state.debug_mode = False
 
 st.sidebar.header("⚙️ Baskı ve Yerleşim Ayarları")
+
+murekkep_modu = st.sidebar.radio(
+    "🖨️ Yazıcı Mürekkep Modu:",
+    [
+        "Standart (Siyah / Renkli)",
+        "Full Magenta Baskı (Siyah Yok)",
+        "Full Cyan Baskı (Siyah Yok)"
+    ],
+    index=0,
+    help="Siyah mürekkebiniz bittiyse tüm çıktıyı (barkod, yazı, çerçeve ve logolar dahil) tamamen Magenta veya Cyan mürekkebine çevirir."
+)
 
 duzen_modu = st.sidebar.radio(
     "Etiket Dizilim Modu Seçin:",
@@ -593,7 +644,7 @@ if st.session_state.processed_data:
             with tempfile.TemporaryDirectory() as temp_dir:
                 output_pdf_path = os.path.join(temp_dir, "Baski_Etiketler.pdf")
                 
-                build_grouped_a4_pdf(final_grouped_receipts, output_pdf_path, duzen_modu, sadece_gorsel_kargo)
+                build_grouped_a4_pdf(final_grouped_receipts, output_pdf_path, duzen_modu, sadece_gorsel_kargo, murekkep_modu)
                 
                 with open(output_pdf_path, "rb") as f: pdf_bytes = f.read()
                 st.download_button(label="📥 Etiket PDF'ini İndir", data=pdf_bytes, file_name="Stil_Sahibi_Baski_Etiketler.pdf", mime="application/pdf")
