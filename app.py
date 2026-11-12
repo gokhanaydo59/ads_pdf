@@ -17,6 +17,7 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, PageBreak, 
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.graphics.barcode import code128
+from reportlab.graphics.shapes import Drawing
 from reportlab.graphics import renderPDF
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
@@ -75,17 +76,25 @@ class ColoredCode128(Flowable):
         self.height = self.bc.height
 
     def draw(self):
-        drawing = self.bc.decompose()
-        def recolor(node):
+        d = Drawing(self.width, self.height)
+        items = self.bc.decompose()
+        if not isinstance(items, (list, tuple)):
+            items = [items]
+
+        def recolor_and_add(node):
             if hasattr(node, 'fillColor') and node.fillColor is not None:
                 node.fillColor = self.color
             if hasattr(node, 'strokeColor') and node.strokeColor is not None:
                 node.strokeColor = self.color
             if hasattr(node, 'contents'):
                 for child in node.contents:
-                    recolor(child)
-        recolor(drawing)
-        renderPDF.draw(drawing, self.canv, 0, 0)
+                    recolor_and_add(child)
+
+        for item in items:
+            recolor_and_add(item)
+            d.add(item)
+
+        renderPDF.draw(d, self.canv, 0, 0)
 
 # ==========================================
 # 2. RENK ANALİZİ İLE KARGO TESPİT MOTORU
