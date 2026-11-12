@@ -354,7 +354,7 @@ def build_grouped_a4_pdf(grouped_receipts, output_pdf_path, duzen_modu, sadece_g
     recipient_style = ParagraphStyle('Recip', parent=styles['Normal'], fontSize=8.5, leading=10.5, fontName=BOLD_FONT, textColor=ink_primary)
     address_style = ParagraphStyle('Addr', parent=styles['Normal'], fontSize=6.5, leading=8.5, fontName=MAIN_FONT, textColor=ink_secondary)
     order_style = ParagraphStyle('Ord', parent=styles['Normal'], fontSize=7.0, leading=9.0, fontName=MAIN_FONT, textColor=ink_secondary)
-    multi_style = ParagraphStyle('Multi', parent=styles['Normal'], fontSize=8.0, leading=10, fontName=BOLD_FONT, textColor=colors.white, backColor=ink_primary, alignment=1)
+    multi_style = ParagraphStyle('Multi', parent=styles['Normal'], fontSize=8.0, leading=10, fontName=BOLD_FONT, textColor=ink_primary, borderColor=ink_primary, borderWidth=0.8, borderPadding=2, alignment=1)
     text_style = ParagraphStyle('Txt', parent=styles['Normal'], fontSize=6.8, leading=9.0, fontName=MAIN_FONT, textColor=ink_primary)
     bc_text_style = ParagraphStyle('BC', parent=styles['Normal'], fontSize=8.5, leading=11, fontName=BOLD_FONT, alignment=1, textColor=ink_primary)
     page_header_style = ParagraphStyle('PageHeaderTitle', parent=styles['Normal'], fontSize=8.5, leading=11, fontName=BOLD_FONT, textColor=ink_primary, alignment=0)
